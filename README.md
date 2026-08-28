@@ -24,7 +24,10 @@ The catalog roots are fixed to the versions in
 | P21A | `goodrunlist_p21a_v1/good_v1_sync.ihep` |
 
 EH1, EH2, and EH3 are included. No newer reconstruction or good-run-list
-version is substituted. At production start, an immutable local
+version is substituted. The 85 fixed catalogs that were unreadable on the
+primary filesystem are preserved under `catalog_backups/` with SHA-256
+checksums; the tool uses these repository copies for those runs. At production
+start, an immutable local
 `catalog-inventory.json` records every expected run, catalog SHA-256, and
 source-file count so final completeness can be checked without relying on
 memory or scheduler history.
@@ -85,6 +88,12 @@ Local logic checks require no ROOT installation:
 make test
 ```
 
+Recheck the 85 recovered fixed catalogs independently:
+
+```bash
+python3 preserve.py verify-catalog-backups
+```
+
 Recheck one copied run, including its exact artifact set, catalog, duration
 rows, byte totals, and SHA-256 hashes:
 
@@ -122,7 +131,6 @@ bind the six event-identification fields from `AdSimpleNL`. The remaining
 
 Plan for a 25 TB destination. The best current estimate is 19–21 TB of slim
 ROOT data, about 72 CPU-days centrally and 80–100 CPU-days as an operational
-allowance. The fixed catalogs project to about 830,000 source files and about
-52,000–54,000 16-file tasks. Exact counts remain gated because 85 of 4,009
-catalog files were transiently unreadable during the latest inventory; the
-production command refuses to proceed until every catalog is readable.
+allowance. The 4,009 fixed catalogs contain exactly 831,334 source files and
+will require about 52,000–54,000 16-file tasks. Production remains gated on a
+clean deployed inventory and the explicit start order.

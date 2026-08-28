@@ -11,7 +11,8 @@ Production requires all of the following:
 
 - an explicit user order to start;
 - the destination disk mounted at the path passed as `--mount-root`;
-- every one of the fixed catalog files readable;
+- every fixed catalog readable from its primary path or the checksum-verified
+  repository backup;
 - `--execute --confirm-start START-DYB-PRESERVATION`;
 - for automatic cluster cleanup,
   `--delete-remote-after-sync --confirm-remote-delete DELETE-VERIFIED-RUN`.
@@ -26,6 +27,7 @@ From this repository on the local machine:
 
 ```bash
 make test
+python3 preserve.py verify-catalog-backups
 python3 preserve.py deploy
 ```
 
@@ -45,8 +47,9 @@ Then require a clean fixed-catalog inventory:
 python3 preserve.py inventory --alias dayabay1
 ```
 
-The command exits nonzero if any catalog is unreadable. Do not bypass this
-gate; retry after the filesystem issue is resolved.
+The inventory reports `backups=85` when the recovered snapshot is active. It
+exits nonzero if a repository backup fails validation or any other catalog is
+unreadable. Do not bypass this gate.
 
 ## Dry run and first one-run pilot
 
@@ -99,6 +102,8 @@ only after measured evidence from the production pilot.
   marker fixes the catalog and chunking; valid outputs and timing reports are
   reopened, verified, and skipped.
 - A catalog checksum, period, hall, or `--files-per-job` mismatch is refused.
+- The 85 recovered catalogs are rehashed and checked for exact period, hall,
+  run, source-path identity, and duplicate paths before they can be staged.
 - A failed transfer remains under `.RUN_STEM.incoming` and never authorizes
   remote deletion. Re-running resumes `rsync` and rechecks all hashes.
 - If the external disk disappears, remount it at the same `--mount-root` and

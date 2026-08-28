@@ -8,6 +8,38 @@ import preserve
 
 
 class PreserveTests(unittest.TestCase):
+    def test_catalog_backups_are_complete_and_used(self):
+        report = preserve.verify_catalog_backups()
+        self.assertEqual(
+            (report["catalogs"], report["inputs"], report["bytes"]),
+            (85, 19823, 2339114),
+        )
+        catalog = dict(preserve.CATALOGS)["P17B"] + "/EH2/run46003.list"
+        data, source, relative = preserve.read_catalog_data("P17B", "EH2", catalog)
+        self.assertEqual(source, "repository-backup")
+        self.assertEqual(relative, "P17B/EH2/run46003.list")
+        self.assertEqual(
+            hashlib.sha256(data).hexdigest(),
+            "6d54b8b3e1bf63b27c9a1ba142e7f6558c97fc0b716a85dafdee127f594f3d3f",
+        )
+
+    def test_inventory_reads_each_catalog(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hall = root / "EH1"
+            hall.mkdir()
+            for run in (12345, 12346):
+                (hall / "run{}.list".format(run)).write_text(
+                    "/dybfs/rec/input-{}.root\n".format(run), encoding="utf-8")
+            previous = preserve.CATALOGS
+            preserve.CATALOGS = (("P17B", str(root)),)
+            try:
+                records = preserve.inventory_records()
+            finally:
+                preserve.CATALOGS = previous
+            self.assertEqual([record["stem"] for record in records], ["run12345", "run12346"])
+            self.assertTrue(all(record["catalog_source"] == "primary" for record in records))
+
     def test_prepare_chunks_and_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -13,6 +13,7 @@ bin/slim-root: src/slim_root.cpp
 
 check:
 	$(PYTHON) -m py_compile preserve.py tests/test_preserve.py
+	$(PYTHON) preserve.py verify-catalog-backups
 	bash -n scripts/build_remote.sh scripts/worker.sh
 
 test: check

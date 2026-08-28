@@ -43,15 +43,15 @@ relative to event data.
 
 ## Campaign estimate
 
-The latest inventory found 4,009 run catalogs. Of these, 3,924 were readable
-and contained 811,511 source files; 85 were transiently unreadable. Extrapolating
-their observed group counts gives approximately 830,202 source files. This
-uncertainty is why production is hard-gated on a fully readable inventory.
+The inventory found 4,009 run catalogs. The 3,924 readable primary catalogs
+contain 811,511 source files. The recovered, checksum-verified copies of the 85
+unreadable catalogs add 19,823, fixing the campaign total at 831,334 source
+files. The recovered catalog snapshot is 2,339,114 bytes.
 
 | Resource | Best estimate | Planning value |
 | --- | ---: | ---: |
 | Slim archive | 19–21 TB decimal | **25 TB available** |
-| CPU | 71.9 CPU-days from 7.486 s/source | **80–100 CPU-days** |
+| CPU | 72.0 CPU-days from 7.486 s/source | **80–100 CPU-days** |
 | Array tasks at 16 sources/task | about 52,000–54,000 | 16 sources/task initially |
 | Largest observed run | 1,091 sources, 69 tasks | about 25–30 GB peak staging |
 | Typical task compute | about 2 minutes | `short` 30-minute queue |
@@ -68,6 +68,6 @@ transactions, hashing, and operational interruptions dominate calendar time;
 budget roughly 2–4 weeks rather than treating raw transfer time as the campaign
 duration.
 
-These are capacity estimates, not a production completion claim. The final
-counts and projected bytes should be refreshed after every catalog is readable
-and the explicit one-run production pilot is complete.
+These are capacity estimates, not a production completion claim. Projected
+bytes and task sizing should be refreshed after the explicit one-run production
+pilot is complete.
