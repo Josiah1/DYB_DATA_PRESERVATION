@@ -52,7 +52,7 @@ files. The recovered catalog snapshot is 2,339,114 bytes.
 | --- | ---: | ---: |
 | Slim archive | 19–21 TB decimal | **25 TB available** |
 | CPU | 72.0 CPU-days from 7.486 s/source | **80–100 CPU-days** |
-| Array tasks at 16 sources/task | about 52,000–54,000 | 16 sources/task initially |
+| Array tasks at 16 sources/task | 53,821 | 16 sources/task initially |
 | Largest observed run | 1,091 sources, 69 tasks | about 25–30 GB peak staging |
 | Typical task compute | about 2 minutes | `short` 30-minute queue |
 

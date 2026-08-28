@@ -132,5 +132,6 @@ bind the six event-identification fields from `AdSimpleNL`. The remaining
 Plan for a 25 TB destination. The best current estimate is 19–21 TB of slim
 ROOT data, about 72 CPU-days centrally and 80–100 CPU-days as an operational
 allowance. The 4,009 fixed catalogs contain exactly 831,334 source files and
-will require about 52,000–54,000 16-file tasks. Production remains gated on a
-clean deployed inventory and the explicit start order.
+will require 53,821 16-file tasks. A deployed inventory on 2026-08-28 read all
+4,009 catalogs with the 85 repository backups active. Production remains gated
+on the explicit start order.
