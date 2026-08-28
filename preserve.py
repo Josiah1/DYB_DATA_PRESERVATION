@@ -29,7 +29,10 @@ DEFAULT_STAGE_ROOT = "/dybfs2/users/lijj16/DYB_DATA_PRESERVATION/staging"
 DEFAULT_LCG_VIEW = "/cvmfs/sft.cern.ch/lcg/views/LCG_110/x86_64-el9-gcc13-opt"
 CATALOG_BACKUP_ROOT = Path(__file__).resolve().parent / "catalog_backups"
 CATALOG_BACKUP_SUMS = CATALOG_BACKUP_ROOT / "SHA256SUMS"
-EXPECTED_CATALOG_BACKUPS = 85
+EXPECTED_CATALOG_BACKUPS = 4009
+EXPECTED_CATALOG_INPUTS = 831334
+EXPECTED_CATALOG_BYTES = 98092666
+EXPECTED_CATALOG_SUMS_SHA256 = "f7e87d4884118170f27c6dff1b64a34cd783d88f5490bc952334430058067728"
 CATALOGS = (
     ("P17B", "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep"),
     ("P19A", "/dybfs2/rec/P19A/goodrunlist_p19a_v5/good_v5_sync.ihep"),
@@ -155,53 +158,68 @@ def parse_catalog_inputs(catalog_data, catalog):
 
 
 @functools.lru_cache(maxsize=1)
+def catalog_backup_digests():
+    manifest = read_bytes_retry(CATALOG_BACKUP_SUMS)
+    if hashlib.sha256(manifest).hexdigest() != EXPECTED_CATALOG_SUMS_SHA256:
+        raise ValueError("catalog-backup checksum manifest mismatch")
+    digests = {}
+    for line in manifest.decode("utf-8").splitlines():
+        try:
+            digest, relative = line.split(None, 1)
+        except ValueError:
+            raise ValueError("malformed catalog-backup checksum line")
+        relative = relative.strip()
+        parts = Path(relative).parts
+        if (not re.fullmatch(r"[0-9a-f]{64}", digest) or relative in digests or
+                len(parts) != 3 or parts[0] not in dict(CATALOGS) or parts[1] not in (
+                    "EH1", "EH2", "EH3") or not re.fullmatch(r"run\d{4,8}\.list", parts[2])):
+            raise ValueError("invalid catalog-backup checksum: {}".format(relative))
+        digests[relative] = digest
+    if len(digests) != EXPECTED_CATALOG_BACKUPS:
+        raise ValueError("catalog-backup checksum manifest is incomplete")
+    return digests
+
+
+@functools.lru_cache(maxsize=1)
 def catalog_backup_records():
     root = CATALOG_BACKUP_ROOT.resolve()
     records = {}
-    with CATALOG_BACKUP_SUMS.open(encoding="utf-8") as stream:
-        for line in stream:
-            try:
-                digest, relative = line.rstrip("\n").split(None, 1)
-            except ValueError:
-                raise ValueError("malformed catalog-backup checksum line")
-            relative = relative.strip()
-            if not re.fullmatch(r"[0-9a-f]{64}", digest) or relative in records:
-                raise ValueError("invalid catalog-backup checksum: {}".format(relative))
-            path = (root / relative).resolve()
-            try:
-                path.relative_to(root)
-            except ValueError:
-                raise ValueError("catalog-backup path escapes its root: {}".format(relative))
-            parts = Path(relative).parts
-            if len(parts) != 3 or parts[0] not in dict(CATALOGS) or parts[1] not in (
-                    "EH1", "EH2", "EH3") or not re.fullmatch(r"run\d{4,8}\.list", parts[2]):
-                raise ValueError("invalid catalog-backup path: {}".format(relative))
-            if path.is_symlink() or not path.is_file():
-                raise ValueError("missing catalog backup: {}".format(relative))
-            data = read_bytes_retry(path)
-            if hashlib.sha256(data).hexdigest() != digest:
-                raise ValueError("catalog-backup checksum mismatch: {}".format(relative))
-            period, hall, name = parts
-            run_number = parse_run_number(Path(name).stem)
-            inputs = parse_catalog_inputs(data, relative)
-            run_fragment = "/run_{:07d}/".format(run_number)
-            name_prefix = "recon.Neutrino.{:07d}.Physics.{}-Merged.{}-I._".format(
-                run_number, hall, period)
-            for source in inputs:
-                if (not source.startswith("/dybfs/rec/{}/rec/".format(period)) or
-                        run_fragment not in source or
-                        not Path(source).name.startswith(name_prefix)):
-                    raise ValueError("catalog-backup source identity mismatch: {}".format(relative))
-            records[relative] = {
-                "path": path,
-                "sha256": digest,
-                "bytes": len(data),
-                "input_count": len(inputs),
-            }
+    for relative, digest in catalog_backup_digests().items():
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            raise ValueError("catalog-backup path escapes its root: {}".format(relative))
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("missing catalog backup: {}".format(relative))
+        data = read_bytes_retry(path)
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("catalog-backup checksum mismatch: {}".format(relative))
+        period, hall, name = Path(relative).parts
+        run_number = parse_run_number(Path(name).stem)
+        inputs = parse_catalog_inputs(data, relative)
+        run_fragment = "/run_{:07d}/".format(run_number)
+        name_pattern = re.compile(
+            r"recon\.(?:Neutrino|NoTag)\.{:07d}\.Physics\.{}-Merged\.{}-I\._\d{{4}}\.root".format(
+                run_number, hall, period))
+        for source in inputs:
+            if (not source.startswith("/dybfs/rec/{}/rec/".format(period)) or
+                    run_fragment not in source or
+                    not name_pattern.fullmatch(Path(source).name)):
+                raise ValueError("catalog-backup source identity mismatch: {}".format(relative))
+        records[relative] = {
+            "path": path,
+            "sha256": digest,
+            "bytes": len(data),
+            "input_count": len(inputs),
+        }
     actual = {
         str(path.relative_to(root)) for path in root.rglob("*.list")
     }
-    if len(records) != EXPECTED_CATALOG_BACKUPS or actual != set(records):
+    input_count = sum(record["input_count"] for record in records.values())
+    byte_count = sum(record["bytes"] for record in records.values())
+    if (actual != set(records) or input_count != EXPECTED_CATALOG_INPUTS or
+            byte_count != EXPECTED_CATALOG_BYTES):
         raise ValueError("catalog-backup set is incomplete or contains unexpected files")
     return records
 
@@ -222,14 +240,13 @@ def read_catalog_data(period, hall, catalog):
     if registered_catalog(period, hall, catalog):
         relative = str(Path(period) / hall / Path(catalog).name)
         backup = CATALOG_BACKUP_ROOT / relative
-        if backup.is_file():
-            record = catalog_backup_records().get(relative)
-            if record is None:
-                raise ValueError("catalog backup is not registered: {}".format(relative))
-            data = read_bytes_retry(backup)
-            if hashlib.sha256(data).hexdigest() != record["sha256"]:
-                raise ValueError("catalog-backup checksum mismatch: {}".format(relative))
-            return data, "repository-backup", relative
+        digest = catalog_backup_digests().get(relative)
+        if digest is None:
+            raise ValueError("catalog backup is not registered: {}".format(relative))
+        data = read_bytes_retry(backup)
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("catalog-backup checksum mismatch: {}".format(relative))
+        return data, "repository-backup", relative
     return read_bytes_retry(catalog), "primary", None
 
 
@@ -240,33 +257,22 @@ def split_chunks(items, size):
 
 
 def inventory_records():
+    roots = dict(CATALOGS)
     records = []
-    for period, root in CATALOGS:
-        for hall in ("EH1", "EH2", "EH3"):
-            directory = Path(root) / hall
-            try:
-                paths = sorted(directory.glob("*.list"))
-            except OSError as error:
-                records.append({"period": period, "hall": hall, "error": str(error)})
-                continue
-            for path in paths:
-                record = {
-                    "period": period,
-                    "hall": hall,
-                    "catalog": str(path),
-                    "stem": path.stem,
-                }
-                try:
-                    data, source, backup = read_catalog_data(period, hall, str(path))
-                    record["catalog_bytes"] = len(data)
-                    record["catalog_sha256"] = hashlib.sha256(data).hexdigest()
-                    record["input_count"] = sum(1 for line in data.splitlines() if line.strip())
-                    record["catalog_source"] = source
-                    if backup:
-                        record["catalog_backup"] = backup
-                except OSError as error:
-                    record["error"] = str(error)
-                records.append(record)
+    for relative, backup in sorted(catalog_backup_records().items()):
+        period, hall, name = Path(relative).parts
+        catalog = str(Path(roots[period]) / hall / name)
+        records.append({
+            "period": period,
+            "hall": hall,
+            "catalog": catalog,
+            "stem": Path(name).stem,
+            "catalog_bytes": backup["bytes"],
+            "catalog_sha256": backup["sha256"],
+            "input_count": backup["input_count"],
+            "catalog_source": "repository-backup",
+            "catalog_backup": relative,
+        })
     return records
 
 
@@ -1025,7 +1031,7 @@ def build_parser():
         args.local_root, root_verifier=args.root_verifier), sort_keys=True)) or 0)
 
     verify_backups = commands.add_parser(
-        "verify-catalog-backups", help="verify the recovered fixed run catalogs")
+        "verify-catalog-backups", help="verify the complete fixed run-catalog snapshot")
     verify_backups.set_defaults(function=lambda args: print(json.dumps(
         verify_catalog_backups(), sort_keys=True)) or 0)
 

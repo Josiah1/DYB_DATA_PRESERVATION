@@ -43,10 +43,11 @@ relative to event data.
 
 ## Campaign estimate
 
-The inventory found 4,009 run catalogs. The 3,924 readable primary catalogs
-contain 811,511 source files. The recovered, checksum-verified copies of the 85
-unreadable catalogs add 19,823, fixing the campaign total at 831,334 source
-files. The recovered catalog snapshot is 2,339,114 bytes.
+The complete checksum-verified snapshot contains 4,009 run catalogs, 831,334
+source paths, and 98,092,666 bytes. It was generated from the four authoritative
+fixed-version sync master lists. All 3,874 jixp per-run copies readable during
+the complete comparison were byte-identical to the generated snapshot; zero
+mismatches were found.
 
 | Resource | Best estimate | Planning value |
 | --- | ---: | ---: |

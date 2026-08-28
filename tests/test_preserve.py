@@ -12,7 +12,7 @@ class PreserveTests(unittest.TestCase):
         report = preserve.verify_catalog_backups()
         self.assertEqual(
             (report["catalogs"], report["inputs"], report["bytes"]),
-            (85, 19823, 2339114),
+            (4009, 831334, 98092666),
         )
         catalog = dict(preserve.CATALOGS)["P17B"] + "/EH2/run46003.list"
         data, source, relative = preserve.read_catalog_data("P17B", "EH2", catalog)
@@ -23,22 +23,12 @@ class PreserveTests(unittest.TestCase):
             "6d54b8b3e1bf63b27c9a1ba142e7f6558c97fc0b716a85dafdee127f594f3d3f",
         )
 
-    def test_inventory_reads_each_catalog(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            hall = root / "EH1"
-            hall.mkdir()
-            for run in (12345, 12346):
-                (hall / "run{}.list".format(run)).write_text(
-                    "/dybfs/rec/input-{}.root\n".format(run), encoding="utf-8")
-            previous = preserve.CATALOGS
-            preserve.CATALOGS = (("P17B", str(root)),)
-            try:
-                records = preserve.inventory_records()
-            finally:
-                preserve.CATALOGS = previous
-            self.assertEqual([record["stem"] for record in records], ["run12345", "run12346"])
-            self.assertTrue(all(record["catalog_source"] == "primary" for record in records))
+    def test_inventory_uses_the_complete_snapshot(self):
+        records = preserve.inventory_records()
+        self.assertEqual(len(records), 4009)
+        self.assertEqual(sum(record["input_count"] for record in records), 831334)
+        self.assertTrue(all(
+            record["catalog_source"] == "repository-backup" for record in records))
 
     def test_prepare_chunks_and_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
