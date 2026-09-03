@@ -52,6 +52,37 @@ backups=4009 inputs=831334`. It exits nonzero if the snapshot is incomplete or
 any checksum, period, hall, run identity, or source path fails validation. Do
 not bypass this gate.
 
+## Staging without a writable `/dybfs2`
+
+On 2026-09-03 `/dybfs2` was mounted read-only on every login node and on the
+compute nodes, and it was 97% full. The pipeline needs `/dybfs2` only for
+reading the sources (`/dybfs` is a symlink into it); the code root and the
+staging root can live on the scratch Lustre pool instead. A worker probe job
+that day (cluster 81006673 on node cws048) confirmed that compute nodes write
+to `/scratchfs2/dyw/lijj16`, read the `/dybfs` sources, load the LCG 110 view
+with ROOT 6.40.02, and run the deployed converter. The user quota there is
+500 GB and 200,000 files against a peak of about 30 GB and a few hundred
+files per run, and the pool had 1 PB free. Scratch is not backed up, which is
+acceptable: the code is in Git and every verified run is deleted from staging
+after its local copy is checked.
+
+Pass both roots to every command:
+
+```bash
+CODE=/scratchfs2/dyw/lijj16/DYB_DATA_PRESERVATION/code
+STAGE=/scratchfs2/dyw/lijj16/DYB_DATA_PRESERVATION/staging
+python3 preserve.py deploy --alias dayabay1 --remote-code-root $CODE --execute
+python3 preserve.py inventory --alias dayabay1 --remote-code-root $CODE
+python3 preserve.py run --remote-code-root $CODE --remote-stage-root $STAGE \
+  --local-root /Volumes/DYB_DISK/data --mount-root /Volumes/DYB_DISK \
+  --period P17B --hall EH1 --limit-runs 1
+```
+
+The converter still deployed under `/dybfs2` is `dyb-slim-v2`; the selection
+in this repository requires deploying `dyb-slim-v3` to the new code root
+first. Sources that fail to stat (see `estimates/raw-size-2026-09-03/`) make
+their chunk fail; such runs stay in staging until the storage is repaired.
+
 ## Dry run and first one-run pilot
 
 Replace both `/Volumes/DYB_DISK` examples with the real mounted disk paths.
