@@ -1,0 +1,48 @@
+== Compression model per converted chunk (bytes = a*AD_kept + b*nonAD_kept) ==
+combo     tag     entries all B/ev   a_AD  b_nonAD model/all
+P17B/EH1  conv00   753604    27.31  47.17    12.88     1.008
+P17B/EH2  conv01   748769    27.11  47.88    12.88     1.013
+P17B/EH3  conv02   844252    40.57  47.63    19.91     1.031
+P19A/EH1  conv03b  670061    28.03  47.18    12.79     1.011
+P19A/EH2  conv04   677718    29.09  47.17    13.21     1.018
+P19A/EH3  conv05   874504    38.49  47.14    18.51     1.038
+P20A/EH1  conv06   711654    29.29  47.18    13.13     1.013
+P20A/EH2  conv07   675087    29.36  47.26    13.15     1.020
+P20A/EH3  conv08   832031    40.86  47.14    20.49     1.043
+P21A/EH1  conv09   771103    22.26  46.66    11.22     1.010
+P21A/EH2  conv10   699278    28.33  47.13    13.04     1.019
+P21A/EH3  conv11   852909    39.44  47.13    19.17     1.042
+
+== Entry fractions (48-file count; per-file AD>0.3 fraction spread) ==
+P17B/EH1  files=3 AD=42.4% AD>0.3=39.5% AD>0.7=20.1% nonAD=57.6%  per-file AD>0.3: 38.6%, 39.8%, 40.1%
+P17B/EH2  files=4 AD=37.8% AD>0.3=34.8% AD>0.7=19.5% nonAD=62.2%  per-file AD>0.3: 23.6%, 38.4%, 39.0%, 39.9%
+P17B/EH3  files=4 AD=77.6% AD>0.3=69.1% AD>0.7=34.1% nonAD=22.4%  per-file AD>0.3: 62.9%, 71.2%, 72.8%, 70.2%
+P19A/EH1  files=3 AD=38.5% AD>0.3=35.5% AD>0.7=20.2% nonAD=61.5%  per-file AD>0.3: 24.2%, 41.2%, 46.5%
+P19A/EH2  files=3 AD=47.5% AD>0.3=43.8% AD>0.7=26.0% nonAD=52.5%  per-file AD>0.3: 44.5%, 43.0%, 43.8%
+P19A/EH3  files=4 AD=79.4% AD>0.3=71.0% AD>0.7=35.6% nonAD=20.6%  per-file AD>0.3: 70.5%, 66.9%, 72.3%, 74.3%
+P20A/EH1  files=4 AD=39.7% AD>0.3=37.1% AD>0.7=20.9% nonAD=60.3%  per-file AD>0.3: 45.7%, 45.5%, 29.4%, 29.9%
+P20A/EH2  files=4 AD=47.3% AD>0.3=43.7% AD>0.7=26.2% nonAD=52.7%  per-file AD>0.3: 41.0%, 45.4%, 44.3%, 44.1%
+P20A/EH3  files=4 AD=83.0% AD>0.3=73.9% AD>0.7=37.2% nonAD=17.0%  per-file AD>0.3: 74.1%, 73.9%, 73.4%, 74.1%
+P21A/EH1  files=4 AD=31.6% AD>0.3=29.4% AD>0.7=17.1% nonAD=68.4%  per-file AD>0.3: 30.1%, 29.6%, 28.5%, 29.5%
+P21A/EH2  files=4 AD=46.1% AD>0.3=42.5% AD>0.7=25.7% nonAD=53.9%  per-file AD>0.3: 43.8%, 42.8%, 41.3%, 42.2%
+P21A/EH3  files=3 AD=81.7% AD>0.3=72.7% AD>0.7=36.6% nonAD=18.3%  per-file AD>0.3: 74.0%, 69.7%, 74.4%
+
+== Campaign totals, 831,334 files (A = direct chunk bytes, C = fractions x coefficients) ==
+all events: A 19.27 TB, C 19.26 TB  (documented baseline 19-21 TB, user baseline 20 TB)
+selection                      A TB   C TB  A/all  C/all  A->20TB  C->20TB
+AD only, E>0.3                14.21  13.64  73.7%  70.8%    14.74    14.16
+AD only, E>0.7                 7.48   7.22  38.8%  37.5%     7.76     7.50
+AD E>0.3 + all WP/RPC         18.33  17.96  95.1%  93.2%    19.02    18.64
+AD E>0.7 + all WP/RPC         11.07  11.54  57.4%  59.9%    11.49    11.98
+
+== Threshold curve (method C, scaled to the 20 TB baseline) ==
+E > 0.0 MeV: AD only 14.93 TB   AD + WP/RPC 19.41 TB
+E > 0.3 MeV: AD only 14.16 TB   AD + WP/RPC 18.64 TB
+E > 0.5 MeV: AD only 10.35 TB   AD + WP/RPC 14.84 TB
+E > 0.7 MeV: AD only  7.50 TB   AD + WP/RPC 11.98 TB
+E > 1.0 MeV: AD only  5.27 TB   AD + WP/RPC  9.75 TB
+E > 1.5 MeV: AD only  3.21 TB   AD + WP/RPC  7.70 TB
+E > 2.0 MeV: AD only  2.06 TB   AD + WP/RPC  6.54 TB
+
+AD spectrum sanity (% of AD entries per 0.1 MeV bin, 0-3 MeV); E<=0: 4.83%; >10 MeV: 4.42%
+1.6 0.4 2.5 11.0 13.4 10.7 7.0 5.9 5.0 3.9 3.1 2.7 2.6 2.8 2.7 2.2 1.7 1.5 1.2 0.9 0.8 0.7 0.7 0.7 0.7 0.9 0.9 0.8 0.5 0.3

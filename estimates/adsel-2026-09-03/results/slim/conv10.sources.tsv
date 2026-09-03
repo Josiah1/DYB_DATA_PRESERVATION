@@ -1,0 +1,2 @@
+sourceIndex	path	entries	inputBytes	firstTriggerTimeSec	firstTriggerTimeNanoSec	lastTriggerTimeSec	lastTriggerTimeNanoSec	dataDurationSeconds	processingWallSeconds	processingCpuSeconds
+0	/dybfs/rec/P21A/rec/runs_0082000/runs_0082100/run_0082195/recon.Neutrino.0082195.Physics.EH2-Merged.P21A-I._0405.root	699278	632583073	1585594651	550454050	1585595438	370801500	786.82034744999999	16.169573741000001	8.138954

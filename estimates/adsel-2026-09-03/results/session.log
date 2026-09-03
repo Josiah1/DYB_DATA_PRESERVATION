@@ -1,0 +1,120 @@
+[rsession start: 2026-09-03T19:25:04+08:00]
+START 2026-09-03T11:25:04Z host=lxlogin001.ihep.ac.cn
+dyb-slim-v2
+CONVERT conv00 P17B EH1 43915 11:25:10
+VERIFY entries=753604 sources=1 bytes=20580460
+RESULT version=dyb-slim-v2 sources=1 entries=753604 input_bytes=692619269 output_bytes=20580460 wall_seconds=29.2428 cpu_seconds=8.27106
+tag	variant	entries	kept	bytes
+conv00	input	753604	753604	20580460
+conv00	all	753604	753604	20580417
+conv00	ad03	753604	299863	14154364
+conv00	ad07	753604	153308	7223073
+conv00	ad03wp	753604	731505	19714578
+conv00	ad07wp	753604	584950	12031874
+CONVERT conv01 P17B EH2 43538 11:26:01
+VERIFY entries=748769 sources=1 bytes=20299615
+RESULT version=dyb-slim-v2 sources=1 entries=748769 input_bytes=672222519 output_bytes=20299615 wall_seconds=15.7526 cpu_seconds=9.26008
+tag	variant	entries	kept	bytes
+conv01	input	748769	748769	20299615
+conv01	all	748769	748769	20299572
+conv01	ad03	748769	287322	13752892
+conv01	ad07	748769	158559	7597880
+conv01	ad03wp	748769	724032	19375856
+conv01	ad07wp	748769	595269	12568442
+CONVERT conv02 P17B EH3 43521 11:26:40
+VERIFY entries=844252 sources=1 bytes=34251593
+RESULT version=dyb-slim-v2 sources=1 entries=844252 input_bytes=765650904 output_bytes=34251593 wall_seconds=15.5467 cpu_seconds=8.78425
+tag	variant	entries	kept	bytes
+conv02	input	844252	844252	34251593
+conv02	all	844252	844252	34251478
+conv02	ad03	844252	600892	28654456
+conv02	ad07	844252	297347	14131249
+conv02	ad03wp	844252	778101	32181834
+conv02	ad07wp	844252	474556	17140430
+CONVERT conv03 P19A EH1 74628 11:27:15
+CONVERT FAILED conv03
+SysError in <TFile::ReadBuffer>: error reading from file /dybfs/rec/P19A/rec/runs_0074000/runs_0074600/run_0074628/recon.Neutrino.0074628.Physics.EH1-Merged.P19A-I._0163.root Input/output error
+Error in <TFile::Init>: /dybfs/rec/P19A/rec/runs_0074000/runs_0074600/run_0074628/recon.Neutrino.0074628.Physics.EH1-Merged.P19A-I._0163.root failed to read the file type data.
+ERROR cannot open input: /dybfs/rec/P19A/rec/runs_0074000/runs_0074600/run_0074628/recon.Neutrino.0074628.Physics.EH1-Merged.P19A-I._0163.root
+CONVERT conv04 P19A EH2 74775 11:27:15
+VERIFY entries=677718 sources=1 bytes=19712726
+RESULT version=dyb-slim-v2 sources=1 entries=677718 input_bytes=621587479 output_bytes=19712726 wall_seconds=10.3999 cpu_seconds=6.67239
+tag	variant	entries	kept	bytes
+conv04	input	677718	677718	19712726
+conv04	all	677718	677718	19712654
+conv04	ad03	677718	301294	14224418
+conv04	ad07	677718	178196	8392206
+conv04	ad03wp	677718	651814	18853076
+conv04	ad07wp	677718	528716	12503458
+CONVERT conv05 P19A EH3 74634 11:27:45
+VERIFY entries=874504 sources=1 bytes=33656958
+RESULT version=dyb-slim-v2 sources=1 entries=874504 input_bytes=760709795 output_bytes=33656958 wall_seconds=12.9664 cpu_seconds=9.21344
+tag	variant	entries	kept	bytes
+conv05	input	874504	874504	33656958
+conv05	all	874504	874504	33656945
+conv05	ad03	874504	585074	27638512
+conv05	ad07	874504	293562	13779024
+conv05	ad03wp	874504	804285	31695527
+conv05	ad07wp	874504	512773	17258941
+CONVERT conv06 P20A EH1 79626 11:28:20
+VERIFY entries=711654 sources=1 bytes=20842424
+RESULT version=dyb-slim-v2 sources=1 entries=711654 input_bytes=656018902 output_bytes=20842424 wall_seconds=16.6289 cpu_seconds=8.58176
+tag	variant	entries	kept	bytes
+conv06	input	711654	711654	20842424
+conv06	all	711654	711654	20842510
+conv06	ad03	711654	324015	15310633
+conv06	ad07	711654	181440	8538541
+conv06	ad03wp	711654	689830	20114522
+conv06	ad07wp	711654	547255	12765583
+CONVERT conv07 P20A EH2 79937 11:28:57
+VERIFY entries=675087 sources=1 bytes=19820391
+RESULT version=dyb-slim-v2 sources=1 entries=675087 input_bytes=624900183 output_bytes=19820391 wall_seconds=14.6974 cpu_seconds=7.05764
+tag	variant	entries	kept	bytes
+conv07	input	675087	675087	19820391
+conv07	all	675087	675087	19820429
+conv07	ad03	675087	306588	14497837
+conv07	ad07	675087	183984	8684956
+conv07	ad03wp	675087	649447	19004974
+conv07	ad07wp	675087	526843	12711841
+CONVERT conv08 P20A EH3 79931 11:29:32
+VERIFY entries=832031 sources=1 bytes=33995328
+RESULT version=dyb-slim-v2 sources=1 entries=832031 input_bytes=738308805 output_bytes=33995328 wall_seconds=16.1933 cpu_seconds=8.1667
+tag	variant	entries	kept	bytes
+conv08	input	832031	832031	33995328
+conv08	all	832031	832031	33995492
+conv08	ad03	832031	614865	29050144
+conv08	ad07	832031	309871	14544482
+conv08	ad03wp	832031	755776	31937190
+conv08	ad07wp	832031	450782	17030136
+CONVERT conv09 P21A EH1 82114 11:30:08
+VERIFY entries=771103 sources=1 bytes=17165507
+RESULT version=dyb-slim-v2 sources=1 entries=771103 input_bytes=637858319 output_bytes=17165507 wall_seconds=18.5512 cpu_seconds=9.0853
+tag	variant	entries	kept	bytes
+conv09	input	771103	771103	17165507
+conv09	all	771103	771103	17165586
+conv09	ad03	771103	228441	10666349
+conv09	ad07	771103	131555	6131051
+conv09	ad03wp	771103	754341	16564930
+conv09	ad07wp	771103	657455	11292502
+CONVERT conv10 P21A EH2 82195 11:30:45
+VERIFY entries=699278 sources=1 bytes=19809931
+RESULT version=dyb-slim-v2 sources=1 entries=699278 input_bytes=632583073 output_bytes=19809931 wall_seconds=16.3876 cpu_seconds=8.30541
+tag	variant	entries	kept	bytes
+conv10	input	699278	699278	19809931
+conv10	all	699278	699278	19809894
+conv10	ad03	699278	299392	14127549
+conv10	ad07	699278	180182	8473647
+conv10	ad03wp	699278	673894	19012432
+conv10	ad07wp	699278	554684	12827636
+CONVERT conv11 P21A EH3 82197 11:31:22
+VERIFY entries=852909 sources=1 bytes=33638539
+RESULT version=dyb-slim-v2 sources=1 entries=852909 input_bytes=740491222 output_bytes=33638539 wall_seconds=17.2263 cpu_seconds=8.75896
+tag	variant	entries	kept	bytes
+conv11	input	852909	852909	33638539
+conv11	all	852909	852909	33638408
+conv11	ad03	852909	594718	28091763
+conv11	ad07	852909	299351	14042926
+conv11	ad03wp	852909	778901	31622138
+conv11	ad07wp	852909	483534	17052802
+END 2026-09-03T11:32:00Z
+[rsession exit: 0 at 2026-09-03T19:32:00+08:00]

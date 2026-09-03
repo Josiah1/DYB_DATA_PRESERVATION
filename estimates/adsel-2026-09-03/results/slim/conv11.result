@@ -1,0 +1,19 @@
+Warning in <TClass::Init>: no dictionary for class PerJobHeader is available
+Warning in <TClass::Init>: no dictionary for class PerHeaderObject is available
+Warning in <TClass::Init>: no dictionary for class PerTemporalDataObject is available
+Warning in <TClass::Init>: no dictionary for class RootIOBaseObject is available
+Warning in <TClass::Init>: no dictionary for class TimeStamp is available
+Warning in <TClass::Init>: no dictionary for class Context is available
+Warning in <TClass::Init>: no dictionary for class DayaBay::JobId is available
+Warning in <TClass::Init>: no dictionary for class PerRef is available
+Warning in <TClass::Init>: no dictionary for class PerJobInfo is available
+Warning in <TClass::Init>: no dictionary for class PerRecHeader is available
+Warning in <TClass::Init>: no dictionary for class PerRecRpcHeader is available
+Warning in <TClass::Init>: no dictionary for class PerRecRpcHeader::RpcCluster is available
+Warning in <TClass::Init>: no dictionary for class PerRecRpcHeader::RpcTrack is available
+Warning in <TClass::Init>: no dictionary for class PerRegistrationSequence is available
+Warning in <TClass::Init>: no dictionary for class PerRegSeqReg is available
+Warning in <TClass::Init>: no dictionary for class PerCalibReadoutHeader is available
+Warning in <TClass::Init>: no dictionary for class PerRunHeader is available
+VERIFY entries=852909 sources=1 bytes=33638539
+RESULT version=dyb-slim-v2 sources=1 entries=852909 input_bytes=740491222 output_bytes=33638539 wall_seconds=17.2263 cpu_seconds=8.75896
