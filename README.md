@@ -43,15 +43,36 @@ Each chunk contains at most 16 source files and these trees:
   `z`, and constant provenance field `runNumber`.
 - `/Event/Data/CalibStats`: `nHit`, `MiddleTimeRMS`, `Quadrant`, `Q1`, `Q2`,
   `MaxQ`, `MaxQ_2inchPMT`, `Kurtosis`, `time_PSD_local_RMS`.
-- `/Preservation/Sources`: source path, output entry range, source byte count,
-  earliest/latest trigger timestamp, data duration, and per-source compression
-  wall/CPU duration.
+- `/Preservation/Sources`: source path, output entry range (`firstEntry`,
+  `keptEntries`), source entry count before selection (`entries`), source byte
+  count, earliest/latest trigger timestamp, data duration, per-source
+  compression wall/CPU duration, and the per-AD counts `adBelow0p3MeV[4]` and
+  `adFrom0p3To0p7MeV[4]`.
+- `/Preservation/selection`: a `TNamed` whose title states the selection rule
+  the chunk was written with; the verifier refuses any other text.
+
+### AD energy selection
+
+The selection is on by default and switched with `--ad-selection on|off` on
+the `run` command (the converter takes the same flag). With it on, an entry
+from an antineutrino detector (`detector` 1-4) is written only when
+`energy > 0.7 MeV`; every entry from any other detector (water pools, RPC) is
+written unchanged. Dropped AD entries are not lost as counts: for each source
+file and each AD, `adBelow0p3MeV` counts entries with `energy <= 0.3 MeV` or
+NaN and `adFrom0p3To0p7MeV` counts entries with `0.3 < energy <= 0.7 MeV`, so
+`entries = keptEntries + sum(adBelow0p3MeV) + sum(adFrom0p3To0p7MeV)` holds for
+every source. The earliest and latest trigger timestamps and the data duration
+are taken over every trigger in the source, dropped ones included. With the
+selection off every entry is written, `keptEntries = entries`, and the two AD
+count arrays are still filled. The mode is recorded in the run marker,
+`run.json`, and every chunk; one archive must use one mode.
 
 Every completed run also has `durations.tsv`, with exactly one row per source
-file in the fixed catalog order. The acquisition duration is calculated as an
-exact signed 64-bit nanosecond difference before conversion to ROOT `Double_t`;
-the double fields are printed with 17 significant digits for round-trip-safe
-text. Integer second/nanosecond endpoints are retained as an exact reference.
+file in the fixed catalog order and the same per-source columns, including
+`keptEntries` and the eight `ad{N}Below0p3MeV`/`ad{N}From0p3To0p7MeV` counts.
+The acquisition duration is calculated as an exact signed 64-bit nanosecond
+difference before conversion to ROOT `Double_t`; the double fields are printed
+with 17 significant digits for round-trip-safe text. Integer second/nanosecond endpoints are retained as an exact reference.
 Compression wall and CPU seconds are also double precision and are collected
 during the same source-data pass.
 
@@ -67,8 +88,11 @@ One run is handled as one transaction:
 1. Validate and split its fixed `.list` catalog.
 2. Submit one HepJob array (`hep_sub -n N`) in group `dyw`.
 3. Compress and time each source; publish chunk outputs atomically.
-4. Reopen every ROOT chunk and validate trees, branches, entry totals, timing
-   fields, and timestamp-derived durations.
+4. Reopen every ROOT chunk and validate trees, branches, the selection tag,
+   per-source selection accounting, entry totals, timing fields, and
+   timestamp-derived durations; with the selection on, rescan every kept AD
+   entry for `energy > 0.7 MeV`; cross-check each chunk's kept entries, source
+   entries, source count, and mode against its timing rows.
 5. Aggregate one `durations.tsv` and SHA-256 every preserved artifact.
 6. Recheck the external mount, `rsync` to `.incoming`, recheck the mount, and
    recompute all SHA-256 hashes locally.
@@ -102,7 +126,8 @@ python3 preserve.py verify-local /mounted/archive/P17B/EH1/RUN_STEM
 ```
 
 After all runs are copied, check the complete archive against the saved fixed
-inventory and rehash every artifact:
+inventory, rehash every artifact, check every run's selection mode and entry
+totals against its timing table, and refuse an archive that mixes modes:
 
 ```bash
 python3 preserve.py verify-all /mounted/archive
@@ -116,7 +141,8 @@ make converter
 python3 preserve.py verify-all /mounted/archive --root-verifier ./bin/slim-root
 ```
 
-The archive-wide full checksum pass reads roughly 20 TB and is therefore
+The archive-wide full checksum pass reads roughly 12 TB (20 TB with the
+selection off) and is therefore
 expected to take hours to days depending on the local disk. It is deliberately
 separate from the mandatory per-run verification already performed before each
 remote deletion.
@@ -125,13 +151,19 @@ remote deletion.
 
 Existing analysis code should stop constructing the `AdScaledNL` chain and
 bind the six event-identification fields from `AdSimpleNL`. The remaining
-`AdSimpleNL` and `CalibStats` paths and branch names are unchanged.
+`AdSimpleNL` and `CalibStats` paths and branch names are unchanged. With the
+default selection, AD entries at or below 0.7 MeV are absent from the event
+trees; their per-file, per-AD counts in the 0.3-0.7 MeV band and below 0.3 MeV
+are in `/Preservation/Sources` and `durations.tsv`.
 
 ## Current estimate
 
-Plan for a 25 TB destination. The best current estimate is 19–21 TB of slim
-ROOT data, about 72 CPU-days centrally and 80–100 CPU-days as an operational
-allowance. The 4,009 fixed catalogs contain exactly 831,334 source files and
+Plan for a 25 TB destination. With the default AD selection the best current
+estimate is about 12 TB (11.5–12.0 TB) of slim ROOT data, measured on
+2026-09-03 from a 48-file sample across every period and hall (see
+`estimates/adsel-2026-09-03/`); with the selection off it is 19–21 TB. CPU is
+unchanged at about 72 CPU-days centrally and 80–100 CPU-days as an operational
+allowance, because reading the sources dominates. The 4,009 fixed catalogs contain exactly 831,334 source files and
 will require 53,821 16-file tasks. The complete repository snapshot fixes all
 4,009 run catalogs and 831,334 source paths independently of catalog-filesystem
 availability. Production remains gated on the explicit start order.

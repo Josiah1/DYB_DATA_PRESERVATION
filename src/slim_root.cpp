@@ -1,6 +1,7 @@
 #include <TBranch.h>
 #include <TDirectory.h>
 #include <TFile.h>
+#include <TNamed.h>
 #include <TTree.h>
 
 #include <sys/resource.h>
@@ -23,7 +24,27 @@
 
 namespace {
 constexpr int kCompressionSettings = 507;  // ZSTD level 7.
-constexpr const char* kVersion = "dyb-slim-v2";
+constexpr const char* kVersion = "dyb-slim-v3";
+constexpr int kAdCount = 4;              // AD detector codes 1-4.
+constexpr double kAdMinEnergyMeV = 0.7;  // AD entries are kept strictly above this.
+constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.7].
+constexpr const char* kSelectionOn =
+    "AD entries (detector 1-4) kept when energy > 0.7 MeV; dropped AD entries counted per source "
+    "and detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.7 MeV "
+    "(adFrom0p3To0p7MeV); every other detector kept; timestamps cover every source trigger";
+constexpr const char* kSelectionOff =
+    "no selection: every entry kept; AD entries (detector 1-4) still counted per source and "
+    "detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.7 MeV "
+    "(adFrom0p3To0p7MeV); timestamps cover every source trigger";
+
+bool is_ad(Short_t detector) { return detector >= 1 && detector <= kAdCount; }
+
+// 0 = kept, 1 = at or below 0.3 MeV or NaN, 2 = in (0.3, 0.7] MeV.
+int ad_class(Float_t energy) {
+  if (energy > kAdMinEnergyMeV) return 0;
+  if (energy > kAdBandLowMeV) return 2;
+  return 1;
+}
 
 const std::vector<std::string> kAdBranches = {
     "site",          "detector",        "triggerType", "triggerNumber", "triggerTimeSec",
@@ -35,9 +56,10 @@ const std::vector<std::string> kCalibBranches = {
     "MaxQ_2inchPMT", "Kurtosis", "time_PSD_local_RMS",
 };
 const std::vector<std::string> kSourceBranches = {
-    "path", "firstEntry", "entries", "inputBytes", "firstTriggerTimeSec",
+    "path", "firstEntry", "entries", "keptEntries", "inputBytes", "firstTriggerTimeSec",
     "firstTriggerTimeNanoSec", "lastTriggerTimeSec", "lastTriggerTimeNanoSec",
     "dataDurationSeconds", "processingWallSeconds", "processingCpuSeconds",
+    "adBelow0p3MeV", "adFrom0p3To0p7MeV",
 };
 
 long long file_size(const std::string& path) {
@@ -95,12 +117,22 @@ long long verify_file(const std::string& path) {
   if (ad->GetEntries() <= 0 || ad->GetEntries() != calib->GetEntries())
     throw std::runtime_error("output entry counts are invalid: " + path);
   if (sources->GetEntries() <= 0) throw std::runtime_error("source manifest is empty: " + path);
+  auto* selection = dynamic_cast<TNamed*>(file.Get("Preservation/selection"));
+  const std::string selection_title = selection ? selection->GetTitle() : "";
+  if (selection_title != kSelectionOn && selection_title != kSelectionOff)
+    throw std::runtime_error("output selection metadata is missing or different: " + path);
+  const bool enabled = selection_title == kSelectionOn;
 
-  Long64_t first_entry = 0, source_entries = 0, source_bytes = 0, total_source_entries = 0;
+  Long64_t first_entry = 0, source_entries = 0, kept_entries = 0, source_bytes = 0;
+  Long64_t total_source_entries = 0, total_kept_entries = 0;
+  Long64_t ad_below[kAdCount] = {0}, ad_band[kAdCount] = {0};
   Int_t first_sec = 0, first_nano = 0, last_sec = 0, last_nano = 0;
   Double_t data_seconds = 0, wall_seconds = 0, used_cpu_seconds = 0;
   sources->SetBranchAddress("firstEntry", &first_entry);
   sources->SetBranchAddress("entries", &source_entries);
+  sources->SetBranchAddress("keptEntries", &kept_entries);
+  sources->SetBranchAddress("adBelow0p3MeV", ad_below);
+  sources->SetBranchAddress("adFrom0p3To0p7MeV", ad_band);
   sources->SetBranchAddress("inputBytes", &source_bytes);
   sources->SetBranchAddress("firstTriggerTimeSec", &first_sec);
   sources->SetBranchAddress("firstTriggerTimeNanoSec", &first_nano);
@@ -110,28 +142,50 @@ long long verify_file(const std::string& path) {
   sources->SetBranchAddress("processingWallSeconds", &wall_seconds);
   sources->SetBranchAddress("processingCpuSeconds", &used_cpu_seconds);
   for (Long64_t index = 0; index < sources->GetEntries(); ++index) {
-    if (sources->GetEntry(index) <= 0 || first_entry != total_source_entries ||
-        source_entries < 0 || source_bytes < 0 || first_nano < 0 ||
+    if (sources->GetEntry(index) <= 0 || first_entry != total_kept_entries ||
+        source_entries < 0 || kept_entries < 0 || kept_entries > source_entries ||
+        source_bytes < 0 || first_nano < 0 ||
         first_nano >= 1000000000 || last_nano < 0 || last_nano >= 1000000000 ||
         !std::isfinite(data_seconds) || data_seconds < 0 || !std::isfinite(wall_seconds) ||
         wall_seconds < 0 || !std::isfinite(used_cpu_seconds) || used_cpu_seconds < 0)
       throw std::runtime_error("invalid source timing record: " + path);
+    Long64_t dropped = 0;
+    for (int ad_index = 0; ad_index < kAdCount; ++ad_index) {
+      if (ad_below[ad_index] < 0 || ad_band[ad_index] < 0)
+        throw std::runtime_error("negative AD selection count: " + path);
+      dropped += ad_below[ad_index] + ad_band[ad_index];
+    }
+    if (enabled ? kept_entries + dropped != source_entries
+                : kept_entries != source_entries || dropped > source_entries)
+      throw std::runtime_error("source selection accounting does not match its entries: " + path);
     const std::int64_t first_ns = static_cast<std::int64_t>(first_sec) * 1000000000LL + first_nano;
     const std::int64_t last_ns = static_cast<std::int64_t>(last_sec) * 1000000000LL + last_nano;
     const double expected_seconds = static_cast<double>(last_ns - first_ns) / 1e9;
     if (last_ns < first_ns || data_seconds != expected_seconds)
       throw std::runtime_error("source duration does not match timestamps: " + path);
     total_source_entries += source_entries;
+    total_kept_entries += kept_entries;
   }
-  if (total_source_entries != ad->GetEntries())
-    throw std::runtime_error("source entry total does not match event trees: " + path);
-  std::cout << "VERIFY entries=" << ad->GetEntries() << " sources=" << sources->GetEntries()
+  if (total_kept_entries != ad->GetEntries())
+    throw std::runtime_error("kept entry total does not match event trees: " + path);
+  Short_t detector = 0;
+  Float_t energy = 0;
+  ad->SetBranchStatus("*", false);
+  bind(ad, "detector", &detector);
+  bind(ad, "energy", &energy);
+  for (Long64_t entry = 0; enabled && entry < ad->GetEntries(); ++entry) {
+    if (ad->GetEntry(entry) <= 0) throw std::runtime_error("cannot read output entry: " + path);
+    if (is_ad(detector) && ad_class(energy) != 0)
+      throw std::runtime_error("output holds an AD entry at or below the selection threshold: " + path);
+  }
+  std::cout << "VERIFY entries=" << ad->GetEntries() << " source_entries=" << total_source_entries
+            << " sources=" << sources->GetEntries() << " selection=" << (enabled ? "on" : "off")
             << " bytes=" << file_size(path) << '\n';
   return ad->GetEntries();
 }
 
 void convert(const std::string& input_list, const std::string& output_path,
-             const std::string& source_report_path, int run_number) {
+             const std::string& source_report_path, int run_number, bool enabled) {
   const auto inputs = read_inputs(input_list);
   if (std::filesystem::exists(output_path) || std::filesystem::exists(source_report_path))
     throw std::runtime_error("refusing to overwrite output or source report");
@@ -152,6 +206,7 @@ void convert(const std::string& input_list, const std::string& output_path,
   const auto wall_start = std::chrono::steady_clock::now();
   const double cpu_start = cpu_seconds();
   long long total_entries = 0;
+  long long total_kept_entries = 0;
   long long total_input_bytes = 0;
 
   try {
@@ -161,7 +216,11 @@ void convert(const std::string& input_list, const std::string& output_path,
     if (!source_report) throw std::runtime_error("cannot create source report: " + partial_report);
     source_report << "sourceIndex\tpath\tentries\tinputBytes\tfirstTriggerTimeSec\t"
                      "firstTriggerTimeNanoSec\tlastTriggerTimeSec\tlastTriggerTimeNanoSec\t"
-                     "dataDurationSeconds\tprocessingWallSeconds\tprocessingCpuSeconds\n";
+                     "dataDurationSeconds\tprocessingWallSeconds\tprocessingCpuSeconds\t"
+                     "keptEntries";
+    for (int ad_index = 1; ad_index <= kAdCount; ++ad_index)
+      source_report << "\tad" << ad_index << "Below0p3MeV\tad" << ad_index << "From0p3To0p7MeV";
+    source_report << '\n';
     source_report << std::setprecision(std::numeric_limits<double>::max_digits10);
     auto* event_dir = output_file.mkdir("Event");
     auto* rec_dir = event_dir->mkdir("Rec");
@@ -204,7 +263,8 @@ void convert(const std::string& input_list, const std::string& output_path,
 
     preservation_dir->cd();
     std::string source_path;
-    Long64_t first_entry = 0, source_entries = 0, source_bytes = 0;
+    Long64_t first_entry = 0, source_entries = 0, kept_entries = 0, source_bytes = 0;
+    Long64_t ad_below[kAdCount] = {0}, ad_band[kAdCount] = {0};
     Int_t first_trigger_sec = 0, first_trigger_nano = 0;
     Int_t last_trigger_sec = 0, last_trigger_nano = 0;
     Double_t data_duration_seconds = 0;
@@ -213,6 +273,7 @@ void convert(const std::string& input_list, const std::string& output_path,
     sources.Branch("path", &source_path);
     sources.Branch("firstEntry", &first_entry, "firstEntry/L");
     sources.Branch("entries", &source_entries, "entries/L");
+    sources.Branch("keptEntries", &kept_entries, "keptEntries/L");
     sources.Branch("inputBytes", &source_bytes, "inputBytes/L");
     sources.Branch("firstTriggerTimeSec", &first_trigger_sec, "firstTriggerTimeSec/I");
     sources.Branch("firstTriggerTimeNanoSec", &first_trigger_nano, "firstTriggerTimeNanoSec/I");
@@ -221,6 +282,8 @@ void convert(const std::string& input_list, const std::string& output_path,
     sources.Branch("dataDurationSeconds", &data_duration_seconds, "dataDurationSeconds/D");
     sources.Branch("processingWallSeconds", &processing_wall_seconds, "processingWallSeconds/D");
     sources.Branch("processingCpuSeconds", &processing_cpu_seconds, "processingCpuSeconds/D");
+    sources.Branch("adBelow0p3MeV", ad_below, "adBelow0p3MeV[4]/L");
+    sources.Branch("adFrom0p3To0p7MeV", ad_band, "adFrom0p3To0p7MeV[4]/L");
 
     for (std::size_t source_index = 0; source_index < inputs.size(); ++source_index) {
       const auto& input_path = inputs[source_index];
@@ -258,8 +321,10 @@ void convert(const std::string& input_list, const std::string& output_path,
       bind(stats, "time_PSD_local_RMS", &time_psd_local_rms);
 
       source_path = input_path;
-      first_entry = total_entries;
+      first_entry = total_kept_entries;
       source_entries = simple->GetEntries();
+      kept_entries = 0;
+      for (int ad_index = 0; ad_index < kAdCount; ++ad_index) ad_below[ad_index] = ad_band[ad_index] = 0;
       source_bytes = file_size(input_path);
       if (source_bytes < 0) throw std::runtime_error("cannot stat input: " + input_path);
       total_input_bytes += source_bytes;
@@ -272,8 +337,15 @@ void convert(const std::string& input_list, const std::string& output_path,
             static_cast<std::int64_t>(trigger_sec) * 1000000000LL + trigger_nano;
         if (entry == 0 || timestamp_ns < first_timestamp_ns) first_timestamp_ns = timestamp_ns;
         if (entry == 0 || timestamp_ns > last_timestamp_ns) last_timestamp_ns = timestamp_ns;
+        if (is_ad(detector)) {
+          const int selection_class = ad_class(energy);
+          if (selection_class == 1) ++ad_below[detector - 1];
+          if (selection_class == 2) ++ad_band[detector - 1];
+          if (enabled && selection_class != 0) continue;
+        }
         ad.Fill();
         calib.Fill();
+        ++kept_entries;
       }
       ad.FlushBaskets();
       calib.FlushBaskets();
@@ -297,8 +369,12 @@ void convert(const std::string& input_list, const std::string& output_path,
                     << source_bytes << '\t' << first_trigger_sec << '\t' << first_trigger_nano
                     << '\t' << last_trigger_sec << '\t' << last_trigger_nano << '\t'
                     << data_duration_seconds << '\t' << processing_wall_seconds << '\t'
-                    << processing_cpu_seconds << '\n';
+                    << processing_cpu_seconds << '\t' << kept_entries;
+      for (int ad_index = 0; ad_index < kAdCount; ++ad_index)
+        source_report << '\t' << ad_below[ad_index] << '\t' << ad_band[ad_index];
+      source_report << '\n';
       total_entries += source_entries;
+      total_kept_entries += kept_entries;
     }
 
     rec_dir->cd();
@@ -307,6 +383,8 @@ void convert(const std::string& input_list, const std::string& output_path,
     calib.Write();
     preservation_dir->cd();
     sources.Write();
+    TNamed selection("selection", enabled ? kSelectionOn : kSelectionOff);
+    selection.Write();
     output_file.Close();
     source_report.close();
     if (!source_report) throw std::runtime_error("cannot finish source report: " + partial_report);
@@ -326,8 +404,10 @@ void convert(const std::string& input_list, const std::string& output_path,
   const double wall_seconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
   const double used_cpu_seconds = cpu_seconds() - cpu_start;
-  std::cout << "RESULT version=" << kVersion << " sources=" << inputs.size()
-            << " entries=" << total_entries << " input_bytes=" << total_input_bytes
+  std::cout << "RESULT version=" << kVersion << " selection=" << (enabled ? "on" : "off")
+            << " sources=" << inputs.size()
+            << " entries=" << total_entries << " kept_entries=" << total_kept_entries
+            << " input_bytes=" << total_input_bytes
             << " output_bytes=" << file_size(output_path) << " wall_seconds=" << wall_seconds
             << " cpu_seconds=" << used_cpu_seconds << '\n';
 }
@@ -343,7 +423,7 @@ int main(int argc, char** argv) {
       verify_file(argv[2]);
       return 0;
     }
-    std::string input_list, output, source_report;
+    std::string input_list, output, source_report, selection = "on";
     int run_number = -1;
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -351,13 +431,15 @@ int main(int argc, char** argv) {
       else if (arg == "--output" && i + 1 < argc) output = argv[++i];
       else if (arg == "--source-report" && i + 1 < argc) source_report = argv[++i];
       else if (arg == "--run-number" && i + 1 < argc) run_number = std::stoi(argv[++i]);
+      else if (arg == "--ad-selection" && i + 1 < argc) selection = argv[++i];
       else throw std::runtime_error("unknown or incomplete argument: " + arg);
     }
-    if (input_list.empty() || output.empty() || source_report.empty() || run_number < 0)
+    if (input_list.empty() || output.empty() || source_report.empty() || run_number < 0 ||
+        (selection != "on" && selection != "off"))
       throw std::runtime_error(
           "usage: slim-root --input-list FILE --output FILE --source-report FILE "
-          "--run-number NUMBER");
-    convert(input_list, output, source_report, run_number);
+          "--run-number NUMBER [--ad-selection on|off]");
+    convert(input_list, output, source_report, run_number, selection == "on");
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "ERROR " << error.what() << '\n';

@@ -48,11 +48,16 @@ class PreserveTests(unittest.TestCase):
             self.assertTrue((run_dir / "reports").is_dir())
             self.assertEqual((run_dir / "chunks" / "000001.list").read_text().splitlines(),
                              inputs[2:4])
+            self.assertEqual((run_dir / "ad-selection").read_text(), "on\n")
+            self.assertEqual(marker["selection"], preserve.selection_record("on"))
             self.assertEqual(
                 preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 2,
                                      require_registered=False)["catalog_sha256"],
                 marker["catalog_sha256"],
             )
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 2,
+                                     require_registered=False, ad_selection="off")
 
     def test_local_verification_detects_tampering(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -68,8 +73,8 @@ class PreserveTests(unittest.TestCase):
             duration = run_dir / "durations.tsv"
             duration.write_text(
                 "\t".join(preserve.DURATION_COLUMNS) + "\n" +
-                "0\t0\t0\t{}\t1\t14\t100\t100\t102\t350\t2.00000025\t1.25\t1.0\n".format(
-                    catalog_path), encoding="utf-8")
+                "0\t0\t0\t{}\t1\t14\t100\t100\t102\t350\t2.00000025\t1.25\t1.0\t1"
+                "\t0\t0\t0\t0\t0\t0\t0\t0\n".format(catalog_path), encoding="utf-8")
             (run_dir / "SHA256SUMS").write_text(
                 "{}  outputs/chunk.slim.000000.root\n{}  durations.tsv\n".format(
                     hashlib.sha256(output.read_bytes()).hexdigest(),
@@ -87,12 +92,17 @@ class PreserveTests(unittest.TestCase):
                 "chunk_count": 1,
                 "duration_file": "durations.tsv",
                 "duration_rows": 1,
+                "source_entries": 1,
+                "source_kept_entries": 1,
+                "selection": preserve.selection_record("on"),
                 "output_count": 1,
                 "output_bytes": output.stat().st_size,
                 "artifact_count": 2,
                 "artifact_bytes": output.stat().st_size + duration.stat().st_size,
             }), encoding="utf-8")
-            self.assertEqual(preserve.verify_local_run(run_dir)["files"], 2)
+            verified = preserve.verify_local_run(run_dir)
+            self.assertEqual((verified["files"], verified["kept_entries"], verified["ad_selection"]),
+                             (2, 1, "on"))
             (archive / "catalog-inventory.json").write_text(json.dumps({
                 "kind": "dyb-preserve-catalog-inventory",
                 "schema_version": preserve.SCHEMA_VERSION,
@@ -103,7 +113,9 @@ class PreserveTests(unittest.TestCase):
                     "input_count": 1,
                 }],
             }), encoding="utf-8")
-            self.assertEqual(preserve.verify_all(archive)["runs"], 1)
+            everything = preserve.verify_all(archive)
+            self.assertEqual((everything["runs"], everything["kept_entries"],
+                              everything["ad_selection"]), (1, 1, "on"))
             output.write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 preserve.verify_local_run(run_dir)
@@ -121,21 +133,55 @@ class PreserveTests(unittest.TestCase):
             run_dir = Path(marker["run_dir"])
             header = "\t".join(preserve.SOURCE_REPORT_COLUMNS) + "\n"
             for chunk_index, paths in enumerate((inputs[:2], inputs[2:])):
-                rows = ["{}\t{}\t10\t20\t100\t0\t101\t0\t1\t0.5\t0.4".format(
+                rows = ["{}\t{}\t10\t20\t100\t0\t101\t0\t1\t0.5\t0.4\t7\t1\t2\t0\t0\t0\t0\t0\t0".format(
                     source_index, path) for source_index, path in enumerate(paths)]
                 (run_dir / "reports" / "run12345.slim.{:06d}.sources.tsv".format(
                     chunk_index)).write_text(header + "\n".join(rows) + "\n", encoding="utf-8")
-            duration, count, entries, input_bytes = preserve.aggregate_duration_reports(
-                run_dir, marker, "run12345")
-            self.assertEqual((count, entries, input_bytes), (3, 30, 60))
-            self.assertEqual(preserve.validate_duration_table(duration, inputs, 2), 3)
+            durations = preserve.aggregate_duration_reports(run_dir, marker, "run12345")
+            duration = durations["path"]
+            self.assertEqual(
+                (durations["rows"], durations["entries"], durations["input_bytes"],
+                 durations["kept"], durations["chunk_totals"]),
+                (3, 30, 60, 21, [(14, 20, 2), (7, 10, 1)]))
+            table = preserve.validate_duration_table(duration, inputs, 2)
+            self.assertEqual((table["rows"], table["kept"], table["chunk_totals"]),
+                             (3, 21, [(14, 20, 2), (7, 10, 1)]))
             lines = duration.read_text(encoding="utf-8").splitlines()
+            original = list(lines)
             fields = lines[1].split("\t")
             fields[10] = "1.5"
             lines[1] = "\t".join(fields)
             duration.write_text("\n".join(lines) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "does not match its timestamps"):
                 preserve.validate_duration_table(duration, inputs, 2)
+            fields = original[1].split("\t")
+            fields[13] = "8"
+            lines = list(original)
+            lines[1] = "\t".join(fields)
+            duration.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "selection accounting"):
+                preserve.validate_duration_table(duration, inputs, 2)
+            duration.write_text("\n".join(original) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "selection accounting"):
+                preserve.validate_duration_table(duration, inputs, 2, mode="off")
+
+    def test_selection_records_and_verify_lines(self):
+        self.assertEqual(preserve.selection_mode(preserve.selection_record("off")), "off")
+        with self.assertRaisesRegex(ValueError, "selection record"):
+            preserve.selection_mode({"mode": "on"})
+        fields = ["0", "/dybfs/rec/a.root", "10", "20", "100", "0", "101", "0", "1", "0.5", "0.4",
+                  "10", "1", "2", "0", "0", "0", "0", "0", "0"]
+        self.assertEqual(preserve.validate_source_fields(fields, fields[1], 0, "off"), (10, 20, 10))
+        with self.assertRaisesRegex(ValueError, "selection accounting"):
+            preserve.validate_source_fields(fields, fields[1], 0, "on")
+        line = "VERIFY entries=14 source_entries=20 sources=2 selection=on bytes=99\n"
+        self.assertEqual(preserve.check_verified_chunk(line, (14, 20, 2), "on")["selection"], "on")
+        with self.assertRaisesRegex(ValueError, "does not match its timing rows"):
+            preserve.check_verified_chunk(line, (14, 20, 2), "off")
+        with self.assertRaisesRegex(ValueError, "does not match its timing rows"):
+            preserve.check_verified_chunk(line, (13, 20, 2), "on")
+        with self.assertRaisesRegex(ValueError, "did not report"):
+            preserve.parse_verify_output("VERIFY entries=14 sources=2\n")
 
     def test_cleanup_is_marker_and_checksum_gated(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -12,7 +12,7 @@ bin/slim-root: src/slim_root.cpp
 	  -o $@ $$( $(ROOT_CONFIG) --libs )
 
 check:
-	$(PYTHON) -m py_compile preserve.py scripts/build_catalog_backups.py tests/test_preserve.py
+	$(PYTHON) -m py_compile preserve.py scripts/build_catalog_backups.py tests/test_preserve.py tests/test_converter.py
 	$(PYTHON) preserve.py verify-catalog-backups
 	bash -n scripts/build_remote.sh scripts/worker.sh
 

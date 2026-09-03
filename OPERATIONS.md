@@ -93,16 +93,20 @@ python3 preserve.py run \
   --confirm-remote-delete DELETE-VERIFIED-RUN
 ```
 
-Defaults are 16 source files per task, HepJob group `dyw`, `short` walltime,
-1,024 MB memory, two submission attempts, and a two-hour per-run wait. Override
-only after measured evidence from the production pilot.
+Defaults are 16 source files per task, the AD energy selection on
+(`--ad-selection on`; `off` keeps every entry), HepJob group `dyw`, `short`
+walltime, 1,024 MB memory, two submission attempts, and a two-hour per-run
+wait. Override only after measured evidence from the production pilot. Use one
+selection mode for the whole archive: `verify-all` rejects a mixed archive and
+`run` refuses to continue a local run made with the other mode.
 
 ## Restart and recovery
 
 - Re-run the same command after an SSH interruption or failed task. The run
   marker fixes the catalog and chunking; valid outputs and timing reports are
   reopened, verified, and skipped.
-- A catalog checksum, period, hall, or `--files-per-job` mismatch is refused.
+- A catalog checksum, period, hall, `--files-per-job`, or `--ad-selection`
+  mismatch is refused.
 - All 4,009 catalogs are rehashed and checked for exact period, hall, run,
   source-path identity, and duplicate paths before they can be staged.
 - A failed transfer remains under `.RUN_STEM.incoming` and never authorizes
@@ -123,15 +127,21 @@ only after measured evidence from the production pilot.
 | `fileIndex` | zero-based index in the run catalog |
 | `chunkIndex`, `sourceIndex` | output chunk and index within that chunk |
 | `path` | original absolute ROOT path |
-| `entries`, `inputBytes` | source event count and original byte count |
+| `entries`, `inputBytes` | source event count before selection and original byte count |
 | `firstTriggerTimeSec/NanoSec` | earliest trigger timestamp in the source |
 | `lastTriggerTimeSec/NanoSec` | latest trigger timestamp in the source |
 | `dataDurationSeconds` | `(latest_ns - earliest_ns) / 1e9` as a double |
 | `processingWallSeconds` | source read plus compression-flush wall time |
 | `processingCpuSeconds` | source read plus compression-flush CPU time |
+| `keptEntries` | entries written to the ROOT chunk from this source |
+| `ad1Below0p3MeV` … `ad4Below0p3MeV` | per-AD entries with `energy <= 0.3 MeV` or NaN |
+| `ad1From0p3To0p7MeV` … `ad4From0p3To0p7MeV` | per-AD entries with `0.3 < energy <= 0.7 MeV` |
 
 The seconds/nanoseconds columns make the acquisition duration independently
-recomputable without subtracting large floating-point epoch values.
+recomputable without subtracting large floating-point epoch values; they cover
+every trigger in the source, including dropped AD entries. With the selection
+on, `entries = keptEntries + sum of the eight AD counts` for every row; with it
+off, `keptEntries = entries` and the counts are informational.
 
 ## Completeness verification
 
@@ -149,8 +159,11 @@ python3 preserve.py verify-all /Volumes/DYB_DISK/data
 
 `verify-all` requires exactly every run in `catalog-inventory.json`, rejects
 unexpected run directories, matches catalog hashes and source counts, checks
-one duration row per catalog source in exact order, checks the exact ROOT chunk
-set, and recomputes every artifact SHA-256 and byte total.
+one duration row per catalog source in exact order with valid selection
+accounting, matches the row, entry, and kept-entry totals against `run.json`,
+checks the exact ROOT chunk set, recomputes every artifact SHA-256 and byte
+total, and reports the single selection mode of the archive. It exits nonzero
+if runs were made with different modes.
 
 Where a compatible ROOT installation is available, add structural reopening:
 
@@ -160,6 +173,9 @@ python3 preserve.py verify-all /Volumes/DYB_DISK/data \
   --root-verifier ./bin/slim-root
 ```
 
-The converter then checks required trees and branches, equal event-tree entry
-counts, source-entry totals, finite nonnegative timing values, and exact
-agreement between each double data duration and its integer timestamps.
+The converter then checks required trees and branches, the selection tag,
+equal event-tree entry counts, per-source selection accounting, kept-entry
+totals, finite nonnegative timing values, exact agreement between each double
+data duration and its integer timestamps, and that no kept AD entry is at or
+below 0.7 MeV; `verify-all` compares each chunk's reported kept entries, source
+entries, source count, and mode with the corresponding timing rows.

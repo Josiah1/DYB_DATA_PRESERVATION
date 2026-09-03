@@ -12,6 +12,7 @@ STATUS_DIR="$RUN_DIR/status"
 CHUNK_LIST="$RUN_DIR/chunks/$TASK_ID.list"
 OUTPUT_PREFIX=$(<"$RUN_DIR/output-prefix")
 RUN_NUMBER=$(<"$RUN_DIR/run-number")
+AD_SELECTION=$(<"$RUN_DIR/ad-selection")
 OUTPUT="$RUN_DIR/outputs/$OUTPUT_PREFIX.slim.$TASK_ID.root"
 SOURCE_REPORT="$RUN_DIR/reports/$OUTPUT_PREFIX.slim.$TASK_ID.sources.tsv"
 RUNNING="$STATUS_DIR/$TASK_ID.running"
@@ -55,7 +56,7 @@ else
   rm -f -- "$OUTPUT" "$SOURCE_REPORT"
   "$CODE_ROOT/bin/slim-root" --input-list "$CHUNK_LIST" --output "$OUTPUT" \
     --source-report "$SOURCE_REPORT" \
-    --run-number "$RUN_NUMBER" > "$REPORT"
+    --run-number "$RUN_NUMBER" --ad-selection "$AD_SELECTION" > "$REPORT"
   "$CODE_ROOT/bin/slim-root" --verify "$OUTPUT" >> "$REPORT"
 fi
 

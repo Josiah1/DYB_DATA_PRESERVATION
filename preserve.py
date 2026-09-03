@@ -19,7 +19,11 @@ import tempfile
 import time
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+AD_SELECTION_MODES = ("on", "off")
+AD_COUNT_COLUMNS = tuple(
+    "ad{}{}".format(detector, kind)
+    for detector in (1, 2, 3, 4) for kind in ("Below0p3MeV", "From0p3To0p7MeV"))
 MARKER_NAME = ".dyb-preserve-run.json"
 START_CONFIRMATION = "START-DYB-PRESERVATION"
 DELETE_CONFIRMATION = "DELETE-VERIFIED-RUN"
@@ -42,8 +46,8 @@ CATALOGS = (
 SOURCE_REPORT_COLUMNS = (
     "sourceIndex", "path", "entries", "inputBytes", "firstTriggerTimeSec",
     "firstTriggerTimeNanoSec", "lastTriggerTimeSec", "lastTriggerTimeNanoSec",
-    "dataDurationSeconds", "processingWallSeconds", "processingCpuSeconds",
-)
+    "dataDurationSeconds", "processingWallSeconds", "processingCpuSeconds", "keptEntries",
+) + AD_COUNT_COLUMNS
 DURATION_COLUMNS = ("fileIndex", "chunkIndex") + SOURCE_REPORT_COLUMNS
 SSH_OPTIONS = (
     "-o", "BatchMode=yes",
@@ -52,6 +56,25 @@ SSH_OPTIONS = (
     "-o", "ServerAliveCountMax=4",
     "-o", "StrictHostKeyChecking=accept-new",
 )
+
+
+def selection_record(mode):
+    if mode not in AD_SELECTION_MODES:
+        raise ValueError("AD selection must be 'on' or 'off'")
+    return {
+        "mode": mode,
+        "ad_detectors": [1, 2, 3, 4],
+        "ad_min_energy_mev": 0.7,
+        "counted_band_mev": [0.3, 0.7],
+        "keep_non_ad": True,
+    }
+
+
+def selection_mode(record):
+    mode = (record or {}).get("mode") if isinstance(record, dict) else None
+    if mode not in AD_SELECTION_MODES or record != selection_record(mode):
+        raise ValueError("run selection record does not match this toolchain")
+    return mode
 
 
 def utc_now():
@@ -277,7 +300,8 @@ def inventory_records():
 
 
 def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
-                require_registered=True):
+                require_registered=True, ad_selection="on"):
+    selection = selection_record(ad_selection)
     catalog = os.path.normpath(catalog)
     if require_registered and not registered_catalog(period, hall, catalog):
         raise ValueError("catalog is not one of the fixed IBD submission-script catalogs")
@@ -294,9 +318,9 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
     run_dir = (Path(stage_root) / period / hall / stem).resolve()
     if run_dir.exists():
         marker = load_json(run_dir / MARKER_NAME)
-        expected = (catalog_sha, files_per_job, period, hall)
+        expected = (catalog_sha, files_per_job, period, hall, selection)
         actual = (marker.get("catalog_sha256"), marker.get("files_per_job"),
-                  marker.get("period"), marker.get("hall"))
+                  marker.get("period"), marker.get("hall"), marker.get("selection"))
         if actual != expected:
             raise ValueError("existing run staging does not match requested catalog")
         return marker
@@ -313,6 +337,7 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
                         "\n".join(paths) + "\n")
         atomic_text(temporary / "output-prefix", stem + "\n")
         atomic_text(temporary / "run-number", str(run_number) + "\n")
+        atomic_text(temporary / "ad-selection", ad_selection + "\n")
 
         quoted_run = shlex.quote(str(run_dir))
         quoted_code = shlex.quote(code_root)
@@ -341,6 +366,7 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
             "chunk_count": len(chunks),
             "run_dir": str(run_dir),
             "code_root": code_root,
+            "selection": selection,
         }
         if catalog_backup:
             marker["catalog_backup"] = catalog_backup
@@ -435,14 +461,39 @@ def parse_result_file(path):
     return values
 
 
-def verify_remote_root(verifier, path):
+def parse_verify_output(text):
+    for line in text.splitlines():
+        if line.startswith("VERIFY "):
+            values = dict(token.split("=", 1) for token in line.split()[1:] if "=" in token)
+            try:
+                parsed = {key: int(values[key]) for key in ("entries", "source_entries", "sources")}
+                parsed["selection"] = values["selection"]
+                return parsed
+            except (KeyError, ValueError):
+                break
+    raise ValueError("ROOT verifier did not report entries, source_entries, sources, and selection")
+
+
+def check_verified_chunk(text, chunk_totals, mode):
+    expected = {"entries": chunk_totals[0], "source_entries": chunk_totals[1],
+                "sources": chunk_totals[2], "selection": mode}
+    values = parse_verify_output(text)
+    if values != expected:
+        raise ValueError("ROOT chunk content does not match its timing rows: verifier={} table={}".format(
+            values, expected))
+    return values
+
+
+def verify_remote_root(verifier, path, chunk_totals, mode):
     script = 'set +u; source "$1/setup.sh"; set -u; exec "$2" --verify "$3"'
-    return run_command([
+    result = run_command([
         "bash", "-c", script, "verify-root", DEFAULT_LCG_VIEW, str(verifier), str(path),
     ])
+    check_verified_chunk(result.stdout, chunk_totals, mode)
+    return result
 
 
-def validate_source_fields(fields, expected_path, expected_source_index):
+def validate_source_fields(fields, expected_path, expected_source_index, mode="on"):
     if len(fields) != len(SOURCE_REPORT_COLUMNS):
         raise ValueError("source timing row has {} fields, expected {}".format(
             len(fields), len(SOURCE_REPORT_COLUMNS)))
@@ -452,6 +503,8 @@ def validate_source_fields(fields, expected_path, expected_source_index):
         first_sec, first_nano = int(fields[4]), int(fields[5])
         last_sec, last_nano = int(fields[6]), int(fields[7])
         data_seconds, wall_seconds, cpu_seconds = map(float, fields[8:11])
+        kept = int(fields[11])
+        ad_counts = [int(value) for value in fields[12:20]]
     except ValueError as error:
         raise ValueError("invalid source timing number: {}".format(error))
     if source_index != expected_source_index or fields[1] != expected_path:
@@ -459,6 +512,10 @@ def validate_source_fields(fields, expected_path, expected_source_index):
     if entries < 0 or input_bytes < 0 or not (0 <= first_nano < 1000000000) or not (
             0 <= last_nano < 1000000000):
         raise ValueError("invalid source timing count, size, or nanoseconds")
+    counted = sum(ad_counts)
+    if kept < 0 or min(ad_counts) < 0 or (
+            kept + counted != entries if mode == "on" else kept != entries or counted > entries):
+        raise ValueError("source selection accounting does not match its entries")
     if not all(math.isfinite(value) and value >= 0
                for value in (data_seconds, wall_seconds, cpu_seconds)):
         raise ValueError("invalid source duration")
@@ -466,7 +523,7 @@ def validate_source_fields(fields, expected_path, expected_source_index):
     last_ns = last_sec * 1000000000 + last_nano
     if last_ns < first_ns or data_seconds != (last_ns - first_ns) / 1e9:
         raise ValueError("source duration does not match its timestamps")
-    return entries, input_bytes
+    return entries, input_bytes, kept
 
 
 def read_source_report(path, expected_paths):
@@ -480,35 +537,48 @@ def read_source_report(path, expected_paths):
 
 
 def aggregate_duration_reports(run_dir, marker, prefix):
+    mode = selection_mode(marker.get("selection"))
     rows = []
     total_entries = 0
     total_input_bytes = 0
+    total_kept = 0
+    chunk_totals = []
     for chunk_index in range(marker["chunk_count"]):
         chunk = run_dir / "chunks" / "{:06d}.list".format(chunk_index)
         expected_paths = [line for line in chunk.read_text(encoding="utf-8").splitlines() if line]
         report = run_dir / "reports" / "{}.slim.{:06d}.sources.tsv".format(
             prefix, chunk_index)
+        chunk_kept = chunk_entries = 0
         for source_index, fields in enumerate(read_source_report(report, expected_paths)):
-            entries, input_bytes = validate_source_fields(
-                fields, expected_paths[source_index], source_index)
+            entries, input_bytes, kept = validate_source_fields(
+                fields, expected_paths[source_index], source_index, mode)
             rows.append([str(len(rows)), str(chunk_index)] + fields)
             total_entries += entries
             total_input_bytes += input_bytes
+            total_kept += kept
+            chunk_kept += kept
+            chunk_entries += entries
+        chunk_totals.append((chunk_kept, chunk_entries, len(expected_paths)))
     if len(rows) != marker["input_count"]:
         raise ValueError("source timing total does not match run input count")
     destination = run_dir / "durations.tsv"
     atomic_text(destination, "\t".join(DURATION_COLUMNS) + "\n" +
                 "\n".join("\t".join(row) for row in rows) + "\n")
-    return destination, len(rows), total_entries, total_input_bytes
+    return {
+        "path": destination, "rows": len(rows), "entries": total_entries,
+        "input_bytes": total_input_bytes, "kept": total_kept, "chunk_totals": chunk_totals,
+    }
 
 
-def validate_duration_table(path, catalog_paths, files_per_job):
+def validate_duration_table(path, catalog_paths, files_per_job, mode="on"):
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     if not lines or tuple(lines[0].split("\t")) != DURATION_COLUMNS:
         raise ValueError("invalid run duration header: {}".format(path))
     rows = [line.split("\t") for line in lines[1:]]
     if len(rows) != len(catalog_paths):
         raise ValueError("run duration row count does not match catalog")
+    total_entries = total_kept = 0
+    chunk_totals = [[0, 0, len(chunk)] for chunk in split_chunks(catalog_paths, files_per_job)]
     for file_index, (fields, expected_path) in enumerate(zip(rows, catalog_paths)):
         if len(fields) != len(DURATION_COLUMNS):
             raise ValueError("invalid run duration row width")
@@ -519,8 +589,15 @@ def validate_duration_table(path, catalog_paths, files_per_job):
             raise ValueError("invalid run duration index: {}".format(error))
         if row_file_index != file_index or row_chunk_index != chunk_index:
             raise ValueError("run duration indices are not contiguous")
-        validate_source_fields(fields[2:], expected_path, source_index)
-    return len(rows)
+        entries, _, kept = validate_source_fields(fields[2:], expected_path, source_index, mode)
+        total_entries += entries
+        total_kept += kept
+        chunk_totals[chunk_index][0] += kept
+        chunk_totals[chunk_index][1] += entries
+    return {
+        "rows": len(rows), "entries": total_entries, "kept": total_kept,
+        "chunk_totals": [tuple(chunk) for chunk in chunk_totals],
+    }
 
 
 def finalize_run(run_dir, stage_root):
@@ -538,11 +615,12 @@ def finalize_run(run_dir, stage_root):
     verifier = Path(marker["code_root"]) / "bin" / "slim-root"
     if not verifier.is_file() or not os.access(str(verifier), os.X_OK):
         raise ValueError("missing ROOT verifier: {}".format(verifier))
+    durations = aggregate_duration_reports(run_dir, marker, prefix)
+    duration_file = durations["path"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(outputs))) as executor:
-        list(executor.map(lambda path: verify_remote_root(verifier, path), outputs))
-
-    duration_file, duration_rows, source_entries, source_input_bytes = \
-        aggregate_duration_reports(run_dir, marker, prefix)
+        list(executor.map(
+            lambda item: verify_remote_root(verifier, item[0], item[1], marker["selection"]["mode"]),
+            zip(outputs, durations["chunk_totals"])))
 
     artifacts = outputs + [duration_file]
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(artifacts))) as executor:
@@ -555,7 +633,8 @@ def finalize_run(run_dir, stage_root):
     reports = [parse_result_file(run_dir / "status" / "{:06d}.ok".format(index))
                for index in range(marker["chunk_count"])]
     numeric_totals = {}
-    for key in ("sources", "entries", "input_bytes", "output_bytes", "wall_seconds", "cpu_seconds"):
+    for key in ("sources", "entries", "kept_entries", "input_bytes", "output_bytes",
+                "wall_seconds", "cpu_seconds"):
         values = [report.get(key) for report in reports if report.get(key) is not None]
         numeric_totals[key] = sum(float(value) for value in values)
     result = dict(marker)
@@ -567,9 +646,10 @@ def finalize_run(run_dir, stage_root):
         "artifact_count": len(artifacts),
         "artifact_bytes": sum(path.stat().st_size for path in artifacts),
         "duration_file": duration_file.name,
-        "duration_rows": duration_rows,
-        "source_entries": source_entries,
-        "source_input_bytes": source_input_bytes,
+        "duration_rows": durations["rows"],
+        "source_entries": durations["entries"],
+        "source_kept_entries": durations["kept"],
+        "source_input_bytes": durations["input_bytes"],
         "checksums": "SHA256SUMS",
         "metrics": numeric_totals,
         "reports_with_metrics": sum(bool(report) for report in reports),
@@ -645,6 +725,7 @@ def verify_local_run(directory, root_verifier=None):
         raise ValueError("local run.json is not complete")
     if result.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("local run schema does not match this toolchain")
+    mode = selection_mode(result.get("selection"))
     if result.get("duration_file") != "durations.tsv" or result.get("checksums") != "SHA256SUMS":
         raise ValueError("run.json names unexpected integrity artifacts")
     validate_token(result.get("stem"), "run stem")
@@ -659,10 +740,15 @@ def verify_local_run(directory, root_verifier=None):
     complete = directory / ".complete"
     if complete.read_text(encoding="utf-8").strip() != result["catalog_sha256"]:
         raise ValueError("local completion marker does not match the catalog")
-    duration_rows = validate_duration_table(
-        directory / result["duration_file"], catalog_paths, result["files_per_job"])
-    if duration_rows != result["duration_rows"]:
-        raise ValueError("duration count does not match run.json")
+    durations = validate_duration_table(
+        directory / result["duration_file"], catalog_paths, result["files_per_job"], mode)
+    duration_rows = durations["rows"]
+    if (duration_rows, durations["entries"], durations["kept"]) != (
+            result.get("duration_rows"), result.get("source_entries"),
+            result.get("source_kept_entries")):
+        raise ValueError("duration rows or entry totals do not match run.json")
+    if len(durations["chunk_totals"]) != result["chunk_count"]:
+        raise ValueError("duration chunk count does not match run.json")
 
     expected_outputs = {
         "outputs/{}.slim.{:06d}.root".format(result["stem"], index)
@@ -706,13 +792,18 @@ def verify_local_run(directory, root_verifier=None):
         verifier = Path(root_verifier).resolve()
         if not verifier.is_file() or not os.access(str(verifier), os.X_OK):
             raise ValueError("ROOT verifier is not executable: {}".format(verifier))
-        for relative in sorted(expected_outputs):
-            run_command([str(verifier), "--verify", str(directory / relative)])
+        for index, expected in enumerate(durations["chunk_totals"]):
+            relative = "outputs/{}.slim.{:06d}.root".format(result["stem"], index)
+            output = run_command([str(verifier), "--verify", str(directory / relative)])
+            check_verified_chunk(output.stdout, expected, mode)
     return {
         "files": checked_files,
         "bytes": checked_bytes,
         "outputs": len(expected_outputs),
         "duration_rows": duration_rows,
+        "source_entries": durations["entries"],
+        "kept_entries": durations["kept"],
+        "ad_selection": mode,
         "catalog_sha256": result["catalog_sha256"],
         "schema_version": result["schema_version"],
         "directory": str(directory),
@@ -774,7 +865,8 @@ def verify_all(local_root, root_verifier=None):
         raise ValueError("preservation set is incomplete: missing={} unexpected={} examples={}".format(
             len(missing), len(unexpected), (missing + unexpected)[:5]))
 
-    total_artifacts = total_bytes = total_inputs = 0
+    total_artifacts = total_bytes = total_inputs = total_entries = total_kept = 0
+    modes = set()
     for relative, record in sorted(expected.items()):
         result = load_json(actual[relative] / "run.json")
         if (result.get("catalog_sha256"), result.get("input_count")) != (
@@ -784,10 +876,18 @@ def verify_all(local_root, root_verifier=None):
         total_artifacts += verified["files"]
         total_bytes += verified["bytes"]
         total_inputs += verified["duration_rows"]
+        total_entries += verified["source_entries"]
+        total_kept += verified["kept_entries"]
+        modes.add(verified["ad_selection"])
+    if len(modes) != 1:
+        raise ValueError("archive mixes AD selection modes: {}".format(sorted(modes)))
     return {
         "complete": True,
         "runs": len(records),
         "inputs": total_inputs,
+        "source_entries": total_entries,
+        "kept_entries": total_kept,
+        "ad_selection": modes.pop(),
         "artifacts": total_artifacts,
         "bytes": total_bytes,
         "local_root": str(local_root),
@@ -812,8 +912,9 @@ def sync_run(alias, remote_result, local_root, mount_root):
     final = local_root / remote_result["period"] / remote_result["hall"] / remote_result["stem"]
     if final.exists():
         verified = verify_local_run(final)
-        if (verified["catalog_sha256"], verified["schema_version"]) != (
-                remote_result["catalog_sha256"], remote_result["schema_version"]):
+        if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"]) != (
+                remote_result["catalog_sha256"], remote_result["schema_version"],
+                remote_result["selection"]["mode"]):
             raise ValueError("existing local run does not match the remote run")
         return verified
     final.parent.mkdir(parents=True, exist_ok=True)
@@ -831,8 +932,9 @@ def sync_run(alias, remote_result, local_root, mount_root):
     run_command(command)
     validate_local_mount(local_root, mount_root)
     verified = verify_local_run(incoming)
-    if (verified["catalog_sha256"], verified["schema_version"]) != (
-            remote_result["catalog_sha256"], remote_result["schema_version"]):
+    if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"]) != (
+            remote_result["catalog_sha256"], remote_result["schema_version"],
+            remote_result["selection"]["mode"]):
         raise ValueError("copied local run does not match the remote run")
     os.replace(str(incoming), str(final))
     verified["directory"] = str(final)
@@ -925,15 +1027,16 @@ def command_run(args):
         local_run = local_root / record["period"] / record["hall"] / record["stem"]
         if local_run.exists():
             existing = verify_local_run(local_run)
-            if (existing["catalog_sha256"], existing["schema_version"]) != (
-                    record["catalog_sha256"], SCHEMA_VERSION):
-                raise ValueError("existing local run does not match the fixed catalog/schema")
+            if (existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"]) != (
+                    record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection):
+                raise ValueError("existing local run does not match the fixed catalog/schema/selection")
             print("already verified locally; skipping cluster processing", flush=True)
             continue
         prepare_args = [
             "_prepare", "--catalog", record["catalog"], "--period", record["period"],
             "--hall", record["hall"], "--stage-root", args.remote_stage_root,
             "--code-root", args.remote_code_root, "--files-per-job", str(args.files_per_job),
+            "--ad-selection", args.ad_selection,
         ]
         marker, _ = remote_json(args.alias, args.remote_code_root, prepare_args)
         status, _ = remote_json(args.alias, args.remote_code_root, [
@@ -1004,6 +1107,9 @@ def build_parser():
     run.add_argument("--run-pattern")
     run.add_argument("--limit-runs", type=int)
     run.add_argument("--files-per-job", type=int, default=16)
+    run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="on",
+                     help="on: keep AD entries above 0.7 MeV plus every other detector; "
+                          "off: keep every entry (band counts are still recorded)")
     run.add_argument("--group", default="dyw")
     run.add_argument("--walltime", default="short")
     run.add_argument("--memory-mb", type=int, default=1024)
@@ -1045,9 +1151,10 @@ def build_parser():
     prepare.add_argument("--stage-root", required=True)
     prepare.add_argument("--code-root", required=True)
     prepare.add_argument("--files-per-job", type=int, required=True)
+    prepare.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="on")
     prepare.set_defaults(function=lambda args: print(json.dumps(prepare_run(
         args.catalog, args.period, args.hall, args.stage_root, args.code_root,
-        args.files_per_job))) or 0)
+        args.files_per_job, ad_selection=args.ad_selection))) or 0)
 
     submit = commands.add_parser("_submit")
     submit.add_argument("--run-dir", required=True)

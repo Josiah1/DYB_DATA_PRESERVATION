@@ -2,7 +2,8 @@
 
 Measured on `dayabay1` on 2026-08-28 with ROOT from
 `LCG_110/x86_64-el9-gcc13-opt`, GCC 13, ZSTD level 7, and the schema in
-`dyb-slim-v2`. This was a bounded direct pilot: no HepJob task was submitted,
+`dyb-slim-v2`, which wrote every entry; it corresponds to `dyb-slim-v3` with
+`--ad-selection off`. This was a bounded direct pilot: no HepJob task was submitted,
 no production staging path was used, and no source data was modified.
 
 ## Real-data pilot
@@ -51,7 +52,8 @@ mismatches were found.
 
 | Resource | Best estimate | Planning value |
 | --- | ---: | ---: |
-| Slim archive | 19–21 TB decimal | **25 TB available** |
+| Slim archive, default AD selection on | about 12 TB (11.5–12.0 TB) | **25 TB available** |
+| Slim archive, selection off | 19–21 TB decimal | 25 TB available |
 | CPU | 72.0 CPU-days from 7.486 s/source | **80–100 CPU-days** |
 | Array tasks at 16 sources/task | 53,821 | 16 sources/task initially |
 | Largest observed run | 1,091 sources, 69 tasks | about 25–30 GB peak staging |
@@ -68,6 +70,13 @@ of continuous payload transfer. Queue latency, 4,009 sequential per-run
 transactions, hashing, and operational interruptions dominate calendar time;
 budget roughly 2–4 weeks rather than treating raw transfer time as the campaign
 duration.
+
+The selection estimate comes from a 2026-09-03 measurement of 48 sample
+sources, four per period and hall, converted and rewritten with the production
+compression: AD entries compress to about 47 bytes each and water-pool/RPC
+entries to 11–20 bytes each, so keeping AD entries above 0.7 MeV plus every
+other detector retains 57–60% of the bytes. The raw counts, converter results,
+and the re-runnable analysis are under `estimates/adsel-2026-09-03/`.
 
 These are capacity estimates, not a production completion claim. Projected
 bytes and task sizing should be refreshed after the explicit one-run production
