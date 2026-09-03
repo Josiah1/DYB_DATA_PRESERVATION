@@ -1,0 +1,39 @@
+== Raw source data set, stat sweep on lxlogin001, 2026-09-03 17:28 UTC ==
+period/hall  catalog  stat ok  denied  missing  bytes TB  mean MB +failed est TB
+P17B/EH1      241290   235856    5302      132    168.51    714.4         172.39
+P17B/EH2      193097   188500    4497      100    127.66    677.2         130.77
+P17B/EH3      123280   120483    2724       73     85.31    708.1          87.29
+P19A/EH1       61067    50682   10216      169     33.05    652.1          39.82
+P19A/EH2       50525    41915    8584       26     26.34    628.3          31.75
+P19A/EH3       30898    25627    5115      156     18.09    706.1          21.82
+P20A/EH1       15233    15041     192        0     10.00    664.5          10.12
+P20A/EH2       17935    17724     211        0     11.20    631.9          11.33
+P20A/EH3       10449    10332     117        0      7.44    720.1           7.52
+P21A/EH1       29041    28490     529       22     19.10    670.4          19.47
+P21A/EH2       37096    36456     618       22     23.18    635.8          23.58
+P21A/EH3       21423    21049     350       24     15.04    714.4          15.30
+total         831334   792155   38455      724    544.90    687.9         571.17
+
+stat-able files: 544.9 TB decimal = 495.6 TiB; allocated blocks 544.5 TB (99.9247% of logical)
+all 831,334 catalog files, failed ones filled with their period/hall mean: 571.2 TB decimal = 519.5 TiB
+unreadable share: 4.71% of files
+missing files listed: 724 (missing_files.list); zero-size files: 8 (zero_size_files.list)
+run directories with failures: 3493 of 4009; fully failed: 9
+  fully failed: /dybfs/rec/P17B/rec/runs_0038000/runs_0038100/run_0038155 1 files
+  fully failed: /dybfs/rec/P17B/rec/runs_0065000/runs_0065500/run_0065555 1 files
+  fully failed: /dybfs/rec/P19A/rec/runs_0072000/runs_0072900/run_0072982 1 files
+  fully failed: /dybfs/rec/P19A/rec/runs_0073000/runs_0073400/run_0073445 1 files
+  fully failed: /dybfs/rec/P19A/rec/runs_0074000/runs_0074400/run_0074493 1 files
+  fully failed: /dybfs/rec/P19A/rec/runs_0074000/runs_0074500/run_0074552 1 files
+  fully failed: /dybfs/rec/P19A/rec/runs_0074000/runs_0074500/run_0074557 1 files
+  fully failed: /dybfs/rec/P19A/rec/runs_0076000/runs_0076000/run_0076015 1 files
+  fully failed: /dybfs/rec/P19A/rec/runs_0078000/runs_0078200/run_0078253 1 files
+zero-size files:
+   /dybfs/rec/P17B/rec/runs_0043000/runs_0043100/run_0043120/recon.Neutrino.0043120.Physics.EH1-Merged.P17B-I._0079.root
+   /dybfs/rec/P17B/rec/runs_0064000/runs_0064300/run_0064342/recon.Neutrino.0064342.Physics.EH1-Merged.P17B-I._0054.root
+   /dybfs/rec/P17B/rec/runs_0042000/runs_0042100/run_0042164/recon.Neutrino.0042164.Physics.EH2-Merged.P17B-I._0073.root
+   /dybfs/rec/P19A/rec/runs_0076000/runs_0076100/run_0076176/recon.Neutrino.0076176.Physics.EH1-Merged.P19A-I._0060.root
+   /dybfs/rec/P19A/rec/runs_0076000/runs_0076800/run_0076815/recon.Neutrino.0076815.Physics.EH1-Merged.P19A-I._0834.root
+   /dybfs/rec/P19A/rec/runs_0077000/runs_0077500/run_0077521/recon.Neutrino.0077521.Physics.EH1-Merged.P19A-I._0497.root
+   /dybfs/rec/P21A/rec/runs_0082000/runs_0082400/run_0082404/recon.Neutrino.0082404.Physics.EH1-Merged.P21A-I._0369.root
+   /dybfs/rec/P21A/rec/runs_0082000/runs_0082400/run_0082406/recon.Neutrino.0082406.Physics.EH3-Merged.P21A-I._0257.root
