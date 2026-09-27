@@ -4,6 +4,9 @@ The sampled files under `/lustrefs/juno26/dyw/rec/All-mini` contain every
 source branch required by the preservation converter, including all inputs
 to the active residual-flasher cuts in
 `/dybfs2/users/lijj16/TWin/Retw_lijj/src_FD`.
+This conclusion concerns the current `All-mini` samples, not historical mini
+productions. No older mini production was inspected in this check; the name
+"mini" alone does not guarantee the same branch content.
 
 ## Verification
 
@@ -27,35 +30,84 @@ schemas, sample paths, counts, read results, and inventory comparison.
 This is a schema and sampled-read check. It does not establish the integrity
 of every file, full event-content equality to the original reconstruction,
 or whether upstream event selections were applied when producing the minis.
+The later six-pair, full-entry comparison below establishes equality of all
+19 required branches only within those six files.
 No production jobs were submitted, and no source data or analysis code was
 changed.
 
 ## Residual-flasher inputs in src_FD
 
-The live `BuildEvent.C` implements the following cuts. Every listed input
-is present as `Float_t` in all 48 samples.
+The live source was traced on 2026-09-27 through
+`Retw.C` -> `StreamReader` -> `SubEvt` -> `BuildEvent.C`. `BuildEvent.C`
+does not bind ROOT branches directly. The exact original-input mapping is:
 
-| Cut in BuildEvent.C | Required ROOT inputs | Source lines |
+| Analysis variable | Original tree / branch | Assignment in Retw.C |
 | --- | --- | --- |
-| Standard 8-inch ellipse | `CalibStats/Quadrant`, `CalibStats/MaxQ` | 73-85 |
-| Zhiyuan groups A, Aa, Ab | `CalibStats/Q1`, `Q2`, `Kurtosis`, `time_PSD_local_RMS`, `MaxQ`; `AdSimpleNL/z` | 108-111 |
-| Zhiyuan group B | `AdSimpleNL/x`, `y`, `z` | 81-82, 112 |
-| Zhiyuan group C | `CalibStats/Kurtosis`, `MaxQ` | 113 |
-| Standard 2-inch cut | `CalibStats/MaxQ_2inchPMT` | 121-122 |
+| `Quadrant` | `CalibStats / Quadrant` | 248 |
+| `Q1`, `Q2` | `CalibStats / Q1`, `Q2` | 249-250 |
+| `QMax2Sum` | `CalibStats / MaxQ` | 251 |
+| `MaxQ2Inch` | `CalibStats / MaxQ_2inchPMT` | 252 |
+| `Kurtosis` | `CalibStats / Kurtosis` | 253 |
+| `time_PSD_local_RMS` | `CalibStats / time_PSD_local_RMS` | 254 |
+| `X`, `Y`, `Z` | `AdSimpleNL / x`, `y`, `z` | 258-260 |
+| `E` | `AdSimpleNL / energy`, then `CorrEnergy` correction | 257, 278 |
+| `NPmt`, `TRms` | `CalibStats / nHit`, `MiddleTimeRMS` | 246-247 |
+| `Site`, `Det` | `AdScaledNL / site`, `detector` | 240-241 |
+| `TrigNum`, `TrigType` | `AdScaledNL / triggerNumber`, `triggerType` | 242-243 |
+| `TrigSec`, `TrigNano` | `AdScaledNL / triggerTimeSec`, `triggerTimeNanoSec` | 244-245 |
+| `Run` | Parsed input filename, through `RunIdx`; not a ROOT branch | 239, 417-444 |
 
-Tree paths in this table are relative to `Event/Data/` for `CalibStats` and
-`Event/Rec/` for `AdSimpleNL`. `Retw.C:248-254` maps the calibration fields
-into the analysis variables: specifically, `QMax2Sum = MaxQ` and
-`MaxQ2Inch = MaxQ_2inchPMT`. `Retw.C:13` enables `Validate_AdSimple`, and
-lines 256-260 read its energy and position. The older Beda/Jinjing residual
-cuts at `BuildEvent.C:86-106` are commented out; their inputs are present too.
+Tree paths are `/Event/Data/CalibStats`, `/Event/Rec/AdSimpleNL`, and
+`/Event/Rec/AdScaledNL`. The bindings are explicit in
+`CalibStatsReader.h:125-141`, `AdSimpleReader.h:107-111`, and
+`AdScaledReader.h:131-137`. `SubEvt.C:54-78` copies these values into the
+object consumed by `BuildEvent`. `Retw.C:13` enables `Validate_AdSimple`;
+the alternative AdScaled/AdTime energy-position modes are disabled.
 
-The cut formulas need no extra branches. The current reader still constructs
-`/Event/Rec/AdScaledNL` (`Retw.C:390`) and reads event metadata from that tree
-(`Retw.C:239-245`). The initial mini-file inspection found only `AdSimpleNL`
-and `CalibStats`. Before running this reader on minis, route the six event
-metadata fields to `AdSimpleNL` and remove bindings to unused absent branches,
-as already required for our own slim outputs. This change was not made here.
+All flasher-shape inputs in the first seven table rows are `Float_t` in
+the 48 sampled minis. `Q1/Q2`, `R2_prev_flasher = X*X + Y*Y`,
+`Z_prev_flasher = Z`, `ellipse`, `Ellipse`, and `ellipse_KR` are calculated
+in `BuildEvent.C:73-113`, not extra ROOT branches. The active residual cut
+is Zhiyuan's union of groups A/Aa/Ab/B/C at lines 108-118; the older
+Beda/Jinjing alternatives at lines 86-106 are commented out. Standard
+8-inch and 2-inch cuts are at lines 84-85 and 121-122. `MuonStat`,
+`IwsMuon`, `IwsNhits`, and veto history are derived by queue/event logic,
+using the timing, trigger, energy and hit-count inputs above.
+
+Thus the flasher-shape formulas use two trees, but the **unchanged TWin
+reader requires three**: `Retw.C:390-395` constructs all three chains,
+checks their counts, and reads them. `StreamReader` is an in-memory adapter
+in this configuration, not a fourth input tree. Before running this reader
+on two-tree minis/slims, add the six metadata bindings to `AdSimpleReader`,
+route the metadata reads there, remove the AdScaled chain/count/read
+dependencies, and remove unused absent branch bindings. No reader change
+was made here. The six-pair comparison below checks AdSimpleNL/CalibStats;
+it is not a six-pair AdScaledNL-to-AdSimpleNL metadata equivalence test.
+
+`CalibStatsReader.C` returned an I/O error during this audit. Its readable
+header contains the actual `Init`/`GetEntry` definitions and branch
+bindings used above. No TWin rebuild or end-to-end physics validation is
+claimed.
+
+### Energy-selection caveat before production
+
+`E` is not simply the original energy branch at the point of
+`BuildEvent.C:125`. `Retw.C:278,517-540` first multiplies it by a
+run-period/site/AD/position-dependent correction. `Fixer.C` loads
+`CaliParameters_withoutaverage.txt` and applies the Alpha/Beta/Gamma
+factors, including the hard-coded Yasu/Katherine factors. These external
+calibration inputs must accompany a faithful analysis migration.
+
+The converter's current `--ad-selection on` and the canvas preselection
+instead use **uncorrected** `AdSimpleNL.energy > 0.7 MeV`. Their equivalence
+to the TWin corrected-energy cut has not been established. A correction
+above unity can promote an event rejected by the raw-energy threshold;
+aggregate dropped-event counts cannot restore its individual variables.
+Do not treat the present selection-on output or its 12 TB estimate as a
+validated lossless input to this TWin analysis. Selection off retains all
+source entries and is the existing way to avoid this particular loss; any
+changed filtering policy needs a separate validation before production.
+No conversion default or cluster analysis source was changed in this audit.
 
 ## Inventory limitation
 
@@ -75,6 +127,61 @@ This is an exact comparison of the indexes, not a current all-file existence
 scan. Treat the 4,087 as unlisted candidates for follow-up, not as confirmed
 currently unreadable files or missing runs. Branch compatibility alone does
 not make the archive a verified complete replacement.
+
+## Original reconstruction versus mini: six complete file pairs
+
+`compare-original.sh` ran read-only on `dayabay1` on 2026-09-27 with
+ROOT 6.40.02. It checked the original `/dybfs/rec/.../recon...root` files
+against their exact same-run/file/stream/version mini counterparts. The
+first three pairs are every input to the residual-flasher canvas; the
+last three are the original August pilot samples recorded in `BENCHMARK.md`.
+This is a direct original-to-mini check, separate from mini-to-slim below.
+
+| Sample | Period/hall | Run/file | Original and mini entries | Result |
+| --- | --- | --- | ---: | --- |
+| Canvas | P21A/EH3 | 81743 / 0234 | 831,353 | Exact match |
+| Canvas | P21A/EH3 | 82379 / 0092 | 828,122 | Exact match |
+| Canvas | P21A/EH3 | 82989 / 0128 | 830,426 | Exact match |
+| Earlier pilot | P17B/EH1 | 48731 / 0071 | 756,795 | Exact match |
+| Earlier pilot | P17B/EH2 | 48610 / 0157 | 750,641 | Exact match |
+| Earlier pilot | P17B/EH3 | 48236 / 0071 | 841,061 | Exact match |
+
+All **4,838,398 events** are present in the same order, with matching
+`site`, `detector`, `triggerNumber`, and second/nanosecond trigger timestamps.
+Both trees have equal entry counts in each file. All 19 required primitive
+branches have the expected scalar ROOT types and **zero bitwise differences**:
+91,929,562 primitive value comparisons, including NaN payloads, infinities,
+and signed zeros. No tolerance or event selection was applied to this check.
+
+Derived `Q1/Q2`, radius, z, the standard and KR ellipses, canvas preselection and residual-cut flags
+also have zero numeric mismatches. For the canvas inputs, independently
+computed original and mini counts both reproduce the saved figure totals:
+2,079,464 AD triggers, 925,747 preselected triggers, and 4,123 residual-cut
+flags. The raw nonfinite values and low 2-inch values are present in the
+originals too; they were not introduced by mini conversion. These diagnostic
+flags use raw energy and omit the TWin energy correction, muon veto and
+coincidence logic; this is a data-preservation check, not a full TWin rerun.
+
+Exact paths, per-branch counts, types, event alignment, read times and
+environment are retained in `original-comparison.jsonl`. The script's
+self-check covers NaNs/infinities, signed-zero differences, finite changes,
+reordering and missing events. If event order differs, it aligns unique
+event keys and reports absent/extra events; ambiguous duplicate-key joins
+are refused. Every sampled pair happened to match in its original order.
+
+This establishes full required-value preservation for these six pairs, not
+for all 831,334 expected files or any branches outside the required set.
+It does not resolve the 4,087 unlisted paths or benchmark production speed.
+The check completed in 85.35 s, exited 0, modified no data, submitted no jobs,
+and left no remote script or persistent SSH session.
+
+To reproduce the bounded comparison:
+
+```bash
+bash ~/.agents/skills/ssh-ops/scripts/remote-run.sh dayabay1 \
+  estimates/mini-branches-2026-09-27/compare-original.sh --pubkey-auth \
+  > estimates/mini-branches-2026-09-27/original-comparison.jsonl
+```
 
 ## Bounded conversion check
 

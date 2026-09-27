@@ -21,6 +21,13 @@ run 82989/file 0128. Exact paths, sizes, entry counts, ROOT version and
 collection time are recorded in `histograms.json`. These are a small
 diagnostic sample, not a representative estimate over every period/hall.
 
+All three mini-files have now been compared against their exact original
+`recon` counterparts. Every one of the 2,489,901 source events is present in
+the same order, with zero bitwise differences across all 19 required
+branches. Derived variables and cut flags also agree. The original files
+independently reproduce all three population totals below. See the
+[full comparison and earlier-pilot cross-check](../../estimates/mini-branches-2026-09-27/README.md#original-reconstruction-versus-mini-six-complete-file-pairs).
+
 | Population | Triggers |
 | --- | ---: |
 | All AD triggers (detector 1–4) | 2,079,464 |
@@ -54,11 +61,27 @@ active Zhiyuan conditions at `BuildEvent.C:108-116`. Every expression is
 saved verbatim in the JSON and in `collect.sh`; no cut was fitted to this
 sample. `QMax2Sum` in the analysis is `CalibStats.MaxQ`.
 
+The diagnostic uses raw `AdSimpleNL.energy`. TWin applies `CorrEnergy`
+before its energy cut, which is not reproduced here, nor are its muon veto
+or coincidence logic. These population totals are therefore not TWin
+selected-event yields.
+
 The first six panels show residual-cut inputs (`Q1/Q2`, `Kurtosis`,
 `time_PSD_local_RMS`, `MaxQ`, `z`, `R`); `Quadrant` and
 `MaxQ_2inchPMT` provide the standard-flasher-cut context. Positions are
 converted from mm to m. PSD-RMS and 2-inch units are labeled as native
 because their calibration units were not checked.
+
+These inputs are not one branch: the calibration fields are separate
+branches of `Event/Data/CalibStats`, while `x`, `y`, `z` and energy are
+branches of `Event/Rec/AdSimpleNL`. `Q1/Q2`, radius and the ellipses are
+computed quantities, not additional source branches. The comparison reads
+both trees separately and verifies their original/mini event correspondence.
+The unchanged TWin reader also requires `AdScaledNL` for event metadata;
+the [source audit and migration caveats](../../estimates/mini-branches-2026-09-27/README.md#residual-flasher-inputs-in-src_fd)
+distinguish that reader dependency from the flasher-shape inputs. This
+validation applies to the current named `All-mini` files, not older mini
+productions with potentially different schemas.
 
 Histograms use unweighted trigger counts, no normalization or smoothing,
 linear x axes and base-10 logarithmic y axes. Zero-count bins are gaps;

@@ -12,6 +12,9 @@ mini-to-slim conversion and full retained-value comparison also passed; the
 new input still needs an IHEP worker pilot. An explicit later order and the
 mounted destination disk are required for production. See [OPERATIONS.md](OPERATIONS.md) for
 the runbook and [BENCHMARK.md](BENCHMARK.md) for measured resource estimates.
+The live TWin source audit also found an unresolved raw-versus-corrected
+energy-selection difference; see [AD energy selection](#ad-energy-selection)
+before using selection-on output for that analysis.
 
 ## Fixed inputs
 
@@ -50,11 +53,17 @@ metadata; resume, transfer, cleanup and final verification check this choice.
 Older schema-3 metadata without this field remains readable as `recon`.
 
 The [mini-file inspection](estimates/mini-branches-2026-09-27/README.md) passed
-the required-branch/type checks on 48 samples. The September 2 archive index
+the required-branch/type checks on 48 samples. A separate full-entry comparison
+of six original/mini pairs (4,838,398 events) found zero bitwise differences
+in all 19 required branches and no missing, added or reordered events.
+This includes all three files in the flasher canvas and the three earlier
+pilot samples; it is not an archive-wide equivalence check. The September 2 archive index
 lists 827,247 of 831,334 required files, leaving 4,087 unlisted; this is not a
 fresh all-file availability check. Completeness still needs resolution before
 a full campaign. A [flasher-variable canvas](plots/residual_flasher/README.md)
 records a separate three-file diagnostic sample.
+These findings apply to the current named `All-mini` samples, not to older
+mini productions, which may have different branch content.
 
 ## Output format
 
@@ -90,6 +99,15 @@ are taken over every trigger in the source, dropped ones included. With the
 selection off every entry is written, `keptEntries = entries`, and the two AD
 count arrays are still filled. The mode is recorded in the run marker,
 `run.json`, and every chunk; one archive must use one mode.
+
+**Pre-production caveat:** this selection uses uncorrected
+`AdSimpleNL.energy`. The live `src_FD/Retw.C` applies `CorrEnergy` before
+`BuildEvent.C` tests the 0.7 MeV threshold. Equivalence has not been
+validated, and corrections above unity can promote otherwise dropped
+events. Their individual inputs cannot be recovered from aggregate counts.
+`--ad-selection off` avoids this loss by retaining every entry; selection-on
+must not yet be considered a lossless TWin input. See the
+[branch/correction audit](estimates/mini-branches-2026-09-27/README.md#residual-flasher-inputs-in-src_fd).
 
 Every completed run also has `durations.tsv`, with exactly one row per source
 file in the fixed catalog order and the same per-source columns, including
@@ -187,12 +205,14 @@ are in `/Preservation/Sources` and `durations.tsv`.
 Plan for a 25 TB destination. With the default AD selection the best current
 estimate is about 12 TB (11.5–12.0 TB) of slim ROOT data, measured on
 2026-09-03 from a 48-file sample across every period and hall (see
-`estimates/adsel-2026-09-03/`); with the selection off it is 19–21 TB. CPU is
+`estimates/adsel-2026-09-03/`); this raw-energy-selected estimate is not yet
+validated for the corrected-energy TWin selection. With the selection off
+it is 19–21 TB. CPU is
 historically about 72 CPU-days centrally and 80–100 CPU-days as an operational
 allowance for original `recon` inputs. Throughput has not yet been remeasured
 for the new `mini` default; these are not mini-input CPU measurements. The
 size projection also assumes minis preserve the necessary source events,
-which the branch check alone does not establish.
+which has been verified for six file pairs, not for the whole archive.
 The 4,009 fixed catalogs contain exactly 831,334 source files and
 will require 53,821 16-file tasks. The complete repository snapshot fixes all
 4,009 run catalogs and 831,334 source paths independently of catalog-filesystem

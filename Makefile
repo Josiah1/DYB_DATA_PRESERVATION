@@ -15,6 +15,7 @@ check:
 	$(PYTHON) -m py_compile preserve.py scripts/build_catalog_backups.py tests/test_preserve.py tests/test_converter.py plots/residual_flasher/plot.py
 	$(PYTHON) preserve.py verify-catalog-backups
 	bash -n scripts/build_remote.sh scripts/worker.sh plots/residual_flasher/collect.sh
+	bash -n estimates/mini-branches-2026-09-27/compare-original.sh
 
 test: check
 	$(PYTHON) -m unittest discover -s tests -v
