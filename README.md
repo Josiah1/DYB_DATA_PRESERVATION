@@ -7,10 +7,11 @@ disk, verifies it, and only then permits deletion of that run's cluster
 staging area.
 
 Production has **not** been started. The repository is ready for review and a
-small real-data pilot with original recon inputs has passed. A one-file local
-mini-to-slim conversion and full retained-value comparison also passed; the
-new input still needs an IHEP worker pilot. An explicit later order and the
-mounted destination disk are required for production. See [OPERATIONS.md](OPERATIONS.md) for
+small real-data pilot with original recon inputs has passed. The subsequent
+48-file IHEP mini-to-slim no-cut benchmark also passed full retained-value
+and duration comparisons; a batch-worker pilot is still needed. An explicit
+later order and the mounted destination disk are required for production.
+See [OPERATIONS.md](OPERATIONS.md) for
 the runbook and [BENCHMARK.md](BENCHMARK.md) for measured resource estimates.
 The live TWin source audit also found an unresolved raw-versus-corrected
 energy-selection difference; see [AD energy selection](#ad-energy-selection)
@@ -67,8 +68,9 @@ mini productions, which may have different branch content.
 
 ## Output format
 
-ROOT with ZSTD level 7 is retained because the pilot compressed substantially
-better than raw NumPy while preserving the tree paths used by the analyses.
+ROOT with ZSTD level 7 remains the production default. The lossless codec
+comparison in [BENCHMARK.md](BENCHMARK.md) measured a smaller LZMA alternative,
+with higher encoding/decoding CPU cost; it has not been adopted as a default.
 Each chunk contains at most 16 source files and these trees:
 
 - `/Event/Rec/AdSimpleNL`: `site`, `detector`, `triggerType`,
@@ -202,17 +204,23 @@ are in `/Preservation/Sources` and `durations.tsv`.
 
 ## Current estimate
 
-Plan for a 25 TB destination. With the default AD selection the best current
-estimate is about 12 TB (11.5–12.0 TB) of slim ROOT data, measured on
-2026-09-03 from a 48-file sample across every period and hall (see
-`estimates/adsel-2026-09-03/`); this raw-energy-selected estimate is not yet
-validated for the corrected-energy TWin selection. With the selection off
-it is 19–21 TB. CPU is
-historically about 72 CPU-days centrally and 80–100 CPU-days as an operational
-allowance for original `recon` inputs. Throughput has not yet been remeasured
-for the new `mini` default; these are not mini-input CPU measurements. The
-size projection also assumes minis preserve the necessary source events,
-which has been verified for six file pairs, not for the whole archive.
+Plan for **25 TB of usable destination space** for one archive copy.
+The 2026-09-27 IHEP-mini test, with **no energy selection**, projects **19.02
+TB** using the current ROOT/ZSTD converter, or **16.69 TB** with the tested
+ROOT/LZMA alternative (12.2% smaller, about 2.3 times the paired repacking CPU).
+The current converter projects to **65.45 CPU-days**; retain 80–100 CPU-days
+as a planning allowance pending a batch-worker pilot. These are sample-based
+projections, not completed-campaign measurements. See
+[BENCHMARK.md](BENCHMARK.md#current-all-event-estimate-ihep-minis-2026-09-27)
+for weighting, sensitivity and timing boundaries.
+
+The historical selection-on estimate remains about 11.5–12.0 TB, based on
+the September 3 study (44 readable counting samples; 12 actually converted
+period/hall representatives). That raw-energy-selected output is not yet
+validated for TWin's corrected-energy selection. Current defaults remain
+unchanged: explicitly use `--ad-selection off` to retain every input event.
+Original-to-mini event equivalence has been checked for six file pairs, not
+for the whole archive.
 The 4,009 fixed catalogs contain exactly 831,334 source files and
 will require 53,821 16-file tasks. The complete repository snapshot fixes all
 4,009 run catalogs and 831,334 source paths independently of catalog-filesystem

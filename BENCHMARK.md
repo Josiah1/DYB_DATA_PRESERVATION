@@ -1,13 +1,84 @@
 # Storage and throughput estimate
 
-The conversion default changed to IHEP `All-mini` on 2026-09-27. The conversion
-CPU/throughput figures below were measured from original `recon` inputs and
-have not been revalidated for minis on IHEP. The schema check and flasher plots do not
-measure conversion throughput or prove event-content equivalence. Retain
-these numbers as historical planning estimates until an IHEP mini-conversion
-pilot. A one-file local mini conversion passed; its approximately 1.76 CPU
-seconds on macOS/arm64 is a smoke-test measurement, not a cluster projection
-(see `estimates/mini-branches-2026-09-27/conversion-check.json`).
+The current no-energy-cut IHEP-mini benchmark is documented in
+[`estimates/noenergy-2026-09-27/`](estimates/noenergy-2026-09-27/README.md).
+It measures the unchanged converter with `--ad-selection off` and compares
+five lossless compression alternatives. Production defaults are unchanged.
+
+## Current all-event estimate: IHEP minis, 2026-09-27
+
+**Without an energy cut, estimate 19.02 TB with the current converter, or
+16.69 TB with the tested ROOT/LZMA alternative. Plan for 25 TB of usable
+destination space for one archive copy.** A 10 TB target was not achieved
+by any tested lossless option; 50 TB is not needed for the compressed copy.
+Independent backup capacity is additional.
+
+The bounded test converted **48 files / 36,262,542 events**, covering all four
+fixed data versions, three halls, and both streams wherever present. Every
+retained source value matched bit-for-bit, in order, and all per-source
+durations matched independently derived integer timestamp differences.
+All **100 alternative outputs** (five variants on 20 paired files) passed
+their full-column round trips. No production jobs were submitted.
+
+The population is the complete fixed-catalog set of **831,334 files**.
+Each data-version/hall/stream is weighted by its exact file count; alternatives
+use a paired size ratio within each of the 20 strata.
+
+| Lossless configuration, all events retained | Projected TB | Change from current ROOT |
+| --- | ---: | ---: |
+| Current ROOT, ZSTD 7 | **19.02** | baseline |
+| ROOT, ZSTD 7, 256 KiB baskets | 18.85 | -0.9% |
+| ROOT, ZSTD 9, 256 KiB baskets | 18.59 | -2.3% |
+| ROOT, LZMA 7, 256 KiB baskets | **16.69** | **-12.2%** |
+| Parquet, Brotli 6, delta/byte-stream-split encoding | 21.08 | +10.8% |
+| Parquet, GZIP 6, delta/byte-stream-split encoding | 21.34 | +12.2% |
+
+TB is decimal (10^12 bytes); the current 19.02 TB estimate is **17.30 TiB**.
+The observed within-stratum size-sensitivity envelope is **17.85–19.75 TB**
+for current ROOT. This is not a statistical confidence interval: samples
+were chosen deterministically at run quantiles, and unsampled files may
+differ. Alternative estimates use only one paired file per stratum. These
+figures include projected capacity for the 4,087 files unlisted in the earlier
+archive index; the benchmark does not resolve their availability.
+
+Current conversion projects to **65.45 CPU-days**, or 6.80 CPU-seconds per
+source. Allow roughly **80–100 CPU-days for planning**, pending an actual
+batch-worker pilot; transfer, archive hashing, queue delays and failures are
+additional. This measurement uses the current source built with `-O2` on the
+login node; production uses `-O3 -DNDEBUG` and may run on different hardware.
+
+LZMA saves about **2.33 TB**, but on the 20 matched files its repacking CPU was
+**2.27 times** ZSTD-7/256-KiB and its full-column decoding CPU was **2.05 times**
+as high. ZSTD-9 repacking took 2.11 times as much CPU for only a small size
+gain. These are paired encoding/decoding measurements, not complete LZMA or
+Parquet production-pipeline timings.
+
+For the requested space/speed balance, keep ROOT/ZSTD unless saving the extra
+2.33 TB is worth the LZMA CPU cost. LZMA changes the codec, not the tree/branch
+layout, but the separate TWin reader migration is still required. No format,
+codec, energy-selection, or analysis-reader default was changed by this test.
+The [ROOT codec choices](https://root.cern.ch/manual/io/#compression-and-performance)
+do not by themselves establish analysis compatibility.
+
+Uncompressed arrays with these 20 output scalars would occupy about **48.34
+TB** before container overhead; this is not an estimate for compressed NumPy.
+The two tested Parquet settings were larger than ROOT, but this is not a claim
+about every possible Parquet encoding. Parquet+ZSTD was unavailable in the
+installed PyArrow build and remains unmeasured. Lossy quantization or event
+removal could reduce storage further, but neither was attempted or validated.
+
+Reproduction instructions, limitations and per-file double-precision timings
+are in the [experiment record](estimates/noenergy-2026-09-27/README.md);
+[`summary.json`](estimates/noenergy-2026-09-27/summary.json) contains the
+machine-readable projections. Independent rational-arithmetic size checks,
+CPU reweighting, timing-row checks and negative completeness tests passed.
+
+## Historical original-reconstruction pilot
+
+The original-reconstruction measurements below are retained as historical
+evidence, not as current mini-input throughput measurements. The one-file
+local macOS/arm64 mini smoke test is also not a cluster projection
+(`estimates/mini-branches-2026-09-27/conversion-check.json`).
 
 Measured on `dayabay1` on 2026-08-28 with ROOT from
 `LCG_110/x86_64-el9-gcc13-opt`, GCC 13, ZSTD level 7, and the schema in
@@ -51,7 +122,7 @@ relative to event data.
   artifacts;
 - zero value or timing mismatches were observed.
 
-## Campaign estimate
+## Historical campaign estimate
 
 The complete checksum-verified snapshot contains 4,009 run catalogs, 831,334
 source paths, and 98,092,666 bytes. It was generated from the four authoritative
@@ -70,8 +141,10 @@ mismatches were found.
 
 Raw NumPy arrays for the retained primitive fields were estimated near 45 TB
 before container/compression overhead, so NumPy is not the space-efficient
-choice. Compressed ROOT stays directly usable by the existing analyses and is
-the selected format.
+choice without compression. ROOT preserves the retained tree paths, but is
+not drop-in compatible with the unchanged TWin reader: its AdScaledNL
+dependencies and filename-based run-number parsing still need migration.
+See the [source audit](estimates/mini-branches-2026-09-27/README.md#residual-flasher-inputs-in-src_fd).
 
 The pilot transfer delivered the 75.9 MB ROOT payload at 56.37 MB/s; an earlier
 repeat measured 36.99 MB/s. At 19.4 TB this corresponds to roughly 4.0–6.1 days
@@ -80,9 +153,10 @@ transactions, hashing, and operational interruptions dominate calendar time;
 budget roughly 2–4 weeks rather than treating raw transfer time as the campaign
 duration.
 
-The selection estimate comes from a 2026-09-03 measurement of 48 sample
-sources, four per period and hall, converted and rewritten with the production
-compression: AD entries compress to about 47 bytes each and water-pool/RPC
+The selection study selected 48 sources, four per period and hall; 44 were
+readable for counting, and 12 (one per period/hall combination) were actually
+converted and rewritten with the production compression. AD entries compress
+to about 47 bytes each and water-pool/RPC
 entries to 11–20 bytes each, so keeping AD entries above 0.7 MeV plus every
 other detector retains 57–60% of the bytes. The raw counts, converter results,
 and the re-runnable analysis are under `estimates/adsel-2026-09-03/`.
