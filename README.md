@@ -7,8 +7,10 @@ disk, verifies it, and only then permits deletion of that run's cluster
 staging area.
 
 Production has **not** been started. The repository is ready for review and a
-small real-data pilot has passed; an explicit later order and the mounted
-destination disk are still required. See [OPERATIONS.md](OPERATIONS.md) for
+small real-data pilot with original recon inputs has passed. A one-file local
+mini-to-slim conversion and full retained-value comparison also passed; the
+new input still needs an IHEP worker pilot. An explicit later order and the
+mounted destination disk are required for production. See [OPERATIONS.md](OPERATIONS.md) for
 the runbook and [BENCHMARK.md](BENCHMARK.md) for measured resource estimates.
 
 ## Fixed inputs
@@ -31,6 +33,28 @@ from the cluster filesystem. At production start, an immutable local
 `catalog-inventory.json` records every expected run, catalog SHA-256, and
 source-file count so final completeness can be checked without relying on
 memory or scheduler history.
+
+Conversion defaults to the matching mini-reconstruction files under
+`/lustrefs/juno26/dyw/rec/All-mini` (`--input-source mini`). A frozen path
+`/dybfs/rec/Pxxx/rec/runs_.../runs_.../run_.../recon....root` maps to
+`/lustrefs/juno26/dyw/rec/All-mini/runs_.../runs_.../run_.../minirecon....root`.
+Run, stream (Neutrino/NoTag), hall, version and file number are unchanged.
+`catalog.list` and its checksum retain the original catalog; chunk lists and
+timing/provenance paths identify the actual mini inputs.
+
+Use `--input-source recon` explicitly for the original files. There is no
+automatic fallback, exclusion, or version substitution. New-run preparation
+opens every input and checks its ROOT header before staging. Missing or
+unreadable files stop the run. Input source is recorded in run and archive
+metadata; resume, transfer, cleanup and final verification check this choice.
+Older schema-3 metadata without this field remains readable as `recon`.
+
+The [mini-file inspection](estimates/mini-branches-2026-09-27/README.md) passed
+the required-branch/type checks on 48 samples. The September 2 archive index
+lists 827,247 of 831,334 required files, leaving 4,087 unlisted; this is not a
+fresh all-file availability check. Completeness still needs resolution before
+a full campaign. A [flasher-variable canvas](plots/residual_flasher/README.md)
+records a separate three-file diagnostic sample.
 
 ## Output format
 
@@ -85,7 +109,8 @@ unused branches are retained.
 
 One run is handled as one transaction:
 
-1. Validate and split its fixed `.list` catalog.
+1. Validate its fixed catalog, resolve the selected input source, check input
+   ROOT headers, and split the resolved paths.
 2. Submit one HepJob array (`hep_sub -n N`) in group `dyw`.
 3. Compress and time each source; publish chunk outputs atomically.
 4. Reopen every ROOT chunk and validate trees, branches, the selection tag,
@@ -127,7 +152,8 @@ python3 preserve.py verify-local /mounted/archive/P17B/EH1/RUN_STEM
 
 After all runs are copied, check the complete archive against the saved fixed
 inventory, rehash every artifact, check every run's selection mode and entry
-totals against its timing table, and refuse an archive that mixes modes:
+totals against its timing table, and refuse an archive that mixes selection
+modes or input sources:
 
 ```bash
 python3 preserve.py verify-all /mounted/archive
@@ -162,8 +188,12 @@ Plan for a 25 TB destination. With the default AD selection the best current
 estimate is about 12 TB (11.5–12.0 TB) of slim ROOT data, measured on
 2026-09-03 from a 48-file sample across every period and hall (see
 `estimates/adsel-2026-09-03/`); with the selection off it is 19–21 TB. CPU is
-unchanged at about 72 CPU-days centrally and 80–100 CPU-days as an operational
-allowance, because reading the sources dominates. The 4,009 fixed catalogs contain exactly 831,334 source files and
+historically about 72 CPU-days centrally and 80–100 CPU-days as an operational
+allowance for original `recon` inputs. Throughput has not yet been remeasured
+for the new `mini` default; these are not mini-input CPU measurements. The
+size projection also assumes minis preserve the necessary source events,
+which the branch check alone does not establish.
+The 4,009 fixed catalogs contain exactly 831,334 source files and
 will require 53,821 16-file tasks. The complete repository snapshot fixes all
 4,009 run catalogs and 831,334 source paths independently of catalog-filesystem
 availability. Production remains gated on the explicit start order.

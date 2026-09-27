@@ -1,5 +1,14 @@
 # Storage and throughput estimate
 
+The conversion default changed to IHEP `All-mini` on 2026-09-27. The conversion
+CPU/throughput figures below were measured from original `recon` inputs and
+have not been revalidated for minis on IHEP. The schema check and flasher plots do not
+measure conversion throughput or prove event-content equivalence. Retain
+these numbers as historical planning estimates until an IHEP mini-conversion
+pilot. A one-file local mini conversion passed; its approximately 1.76 CPU
+seconds on macOS/arm64 is a smoke-test measurement, not a cluster projection
+(see `estimates/mini-branches-2026-09-27/conversion-check.json`).
+
 Measured on `dayabay1` on 2026-08-28 with ROOT from
 `LCG_110/x86_64-el9-gcc13-opt`, GCC 13, ZSTD level 7, and the schema in
 `dyb-slim-v2`, which wrote every entry; it corresponds to `dyb-slim-v3` with

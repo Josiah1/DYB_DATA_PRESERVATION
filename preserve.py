@@ -21,6 +21,9 @@ import time
 
 SCHEMA_VERSION = 3
 AD_SELECTION_MODES = ("on", "off")
+INPUT_SOURCES = ("mini", "recon")
+DEFAULT_INPUT_SOURCE = "mini"
+MINI_ROOT = "/lustrefs/juno26/dyw/rec/All-mini"
 AD_COUNT_COLUMNS = tuple(
     "ad{}{}".format(detector, kind)
     for detector in (1, 2, 3, 4) for kind in ("Below0p3MeV", "From0p3To0p7MeV"))
@@ -180,6 +183,45 @@ def parse_catalog_inputs(catalog_data, catalog):
     return inputs
 
 
+def input_source_mode(record):
+    # Schema-3 archives made before mini support used the original recon paths.
+    source = record.get("input_source", "recon")
+    if source not in INPUT_SOURCES:
+        raise ValueError("invalid input source: {}".format(source))
+    return source
+
+
+def resolve_inputs(paths, source=DEFAULT_INPUT_SOURCE):
+    input_source_mode({"input_source": source})
+    if source == "recon":
+        return list(paths)
+    pattern = re.compile(
+        r"/dybfs/rec/(P17B|P19A|P20A|P21A)/rec/"
+        r"(runs_\d{7}/runs_\d{7}/run_(\d{7}))/"
+        r"(recon\.(?:Neutrino|NoTag)\.\3\.Physics\.EH[123]-Merged\.\1-I\._\d{4}\.root)")
+    resolved = []
+    for path in paths:
+        match = pattern.fullmatch(path)
+        if not match:
+            raise ValueError("cannot map fixed source to mini input: {}".format(path))
+        resolved.append(str(Path(MINI_ROOT) / match.group(2) / ("mini" + match.group(4))))
+    return resolved
+
+
+def check_input_files(paths):
+    unavailable = []
+    for path in paths:
+        try:
+            with open(path, "rb") as stream:
+                if stream.read(4) != b"root":
+                    raise ValueError("not a ROOT file header")
+        except (OSError, ValueError) as error:
+            unavailable.append("{}: {}".format(path, error))
+    if unavailable:
+        raise ValueError("{} unavailable inputs; no files skipped or substituted. Examples: {}".format(
+            len(unavailable), unavailable[:5]))
+
+
 @functools.lru_cache(maxsize=1)
 def catalog_backup_digests():
     manifest = read_bytes_retry(CATALOG_BACKUP_SUMS)
@@ -300,7 +342,7 @@ def inventory_records():
 
 
 def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
-                require_registered=True, ad_selection="on"):
+                require_registered=True, ad_selection="on", input_source=DEFAULT_INPUT_SOURCE):
     selection = selection_record(ad_selection)
     catalog = os.path.normpath(catalog)
     if require_registered and not registered_catalog(period, hall, catalog):
@@ -313,18 +355,20 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
     run_number = parse_run_number(stem)
     catalog_data, catalog_source, catalog_backup = read_catalog_data(period, hall, catalog)
     catalog_sha = hashlib.sha256(catalog_data).hexdigest()
-    inputs = parse_catalog_inputs(catalog_data, catalog)
+    inputs = resolve_inputs(parse_catalog_inputs(catalog_data, catalog), input_source)
 
     run_dir = (Path(stage_root) / period / hall / stem).resolve()
     if run_dir.exists():
         marker = load_json(run_dir / MARKER_NAME)
-        expected = (catalog_sha, files_per_job, period, hall, selection)
+        expected = (catalog_sha, files_per_job, period, hall, selection, input_source)
         actual = (marker.get("catalog_sha256"), marker.get("files_per_job"),
-                  marker.get("period"), marker.get("hall"), marker.get("selection"))
+                  marker.get("period"), marker.get("hall"), marker.get("selection"),
+                  input_source_mode(marker))
         if actual != expected:
             raise ValueError("existing run staging does not match requested catalog")
         return marker
 
+    check_input_files(inputs)
     run_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".{}.prepare-".format(stem), dir=str(run_dir.parent)))
     try:
@@ -361,6 +405,7 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
             "catalog": catalog,
             "catalog_source": catalog_source,
             "catalog_sha256": catalog_sha,
+            "input_source": input_source,
             "input_count": len(inputs),
             "files_per_job": files_per_job,
             "chunk_count": len(chunks),
@@ -538,6 +583,14 @@ def read_source_report(path, expected_paths):
 
 def aggregate_duration_reports(run_dir, marker, prefix):
     mode = selection_mode(marker.get("selection"))
+    catalog = run_dir / "catalog.list"
+    if sha256_file(catalog) != marker["catalog_sha256"]:
+        raise ValueError("staged catalog checksum does not match run marker")
+    inputs = resolve_inputs(parse_catalog_inputs(catalog.read_bytes(), str(catalog)),
+                            input_source_mode(marker))
+    chunks = split_chunks(inputs, marker["files_per_job"])
+    if len(chunks) != marker["chunk_count"]:
+        raise ValueError("staged chunk count does not match fixed catalog")
     rows = []
     total_entries = 0
     total_input_bytes = 0
@@ -546,6 +599,8 @@ def aggregate_duration_reports(run_dir, marker, prefix):
     for chunk_index in range(marker["chunk_count"]):
         chunk = run_dir / "chunks" / "{:06d}.list".format(chunk_index)
         expected_paths = [line for line in chunk.read_text(encoding="utf-8").splitlines() if line]
+        if expected_paths != chunks[chunk_index]:
+            raise ValueError("staged chunk paths do not match fixed catalog/input source")
         report = run_dir / "reports" / "{}.slim.{:06d}.sources.tsv".format(
             prefix, chunk_index)
         chunk_kept = chunk_entries = 0
@@ -668,7 +723,8 @@ def cleanup_run(run_dir, stage_root, expected_catalog_sha):
         raise ValueError("run has not been finalized")
     result = load_json(result_path)
     if (not result.get("complete") or result.get("catalog_sha256") != expected_catalog_sha or
-            result.get("schema_version") != SCHEMA_VERSION):
+            result.get("schema_version") != SCHEMA_VERSION or
+            input_source_mode(result) != input_source_mode(marker)):
         raise ValueError("finalized run does not match the cleanup request")
     if list((run_dir / "status").glob("*.running")) or list((run_dir / "status").glob("*.fail")):
         raise ValueError("run still has running or failed tasks")
@@ -726,6 +782,7 @@ def verify_local_run(directory, root_verifier=None):
     if result.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("local run schema does not match this toolchain")
     mode = selection_mode(result.get("selection"))
+    input_source = input_source_mode(result)
     if result.get("duration_file") != "durations.tsv" or result.get("checksums") != "SHA256SUMS":
         raise ValueError("run.json names unexpected integrity artifacts")
     validate_token(result.get("stem"), "run stem")
@@ -741,7 +798,8 @@ def verify_local_run(directory, root_verifier=None):
     if complete.read_text(encoding="utf-8").strip() != result["catalog_sha256"]:
         raise ValueError("local completion marker does not match the catalog")
     durations = validate_duration_table(
-        directory / result["duration_file"], catalog_paths, result["files_per_job"], mode)
+        directory / result["duration_file"], resolve_inputs(catalog_paths, input_source),
+        result["files_per_job"], mode)
     duration_rows = durations["rows"]
     if (duration_rows, durations["entries"], durations["kept"]) != (
             result.get("duration_rows"), result.get("source_entries"),
@@ -804,6 +862,7 @@ def verify_local_run(directory, root_verifier=None):
         "source_entries": durations["entries"],
         "kept_entries": durations["kept"],
         "ad_selection": mode,
+        "input_source": input_source,
         "catalog_sha256": result["catalog_sha256"],
         "schema_version": result["schema_version"],
         "directory": str(directory),
@@ -818,7 +877,8 @@ def catalog_signature(records):
         raise ValueError("invalid catalog inventory record: {}".format(error))
 
 
-def save_inventory_snapshot(local_root, records):
+def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOURCE):
+    input_source_mode({"input_source": input_source})
     bad = [record for record in records if "error" in record]
     if bad:
         raise ValueError("cannot save an inventory with unreadable catalogs")
@@ -830,10 +890,13 @@ def save_inventory_snapshot(local_root, records):
             raise ValueError("existing catalog inventory has the wrong kind or schema")
         if catalog_signature(previous.get("records", [])) != catalog_signature(records):
             raise ValueError("fixed catalog inventory differs from the existing local snapshot")
+        if input_source_mode(previous) != input_source:
+            raise ValueError("input source differs from the existing local snapshot")
         return path
     atomic_json(path, {
         "kind": "dyb-preserve-catalog-inventory",
         "schema_version": SCHEMA_VERSION,
+        "input_source": input_source,
         "created_at": utc_now(),
         "records": records,
     })
@@ -867,6 +930,7 @@ def verify_all(local_root, root_verifier=None):
 
     total_artifacts = total_bytes = total_inputs = total_entries = total_kept = 0
     modes = set()
+    input_sources = set()
     for relative, record in sorted(expected.items()):
         result = load_json(actual[relative] / "run.json")
         if (result.get("catalog_sha256"), result.get("input_count")) != (
@@ -879,8 +943,13 @@ def verify_all(local_root, root_verifier=None):
         total_entries += verified["source_entries"]
         total_kept += verified["kept_entries"]
         modes.add(verified["ad_selection"])
+        input_sources.add(verified["input_source"])
     if len(modes) != 1:
         raise ValueError("archive mixes AD selection modes: {}".format(sorted(modes)))
+    if len(input_sources) != 1:
+        raise ValueError("archive mixes input sources: {}".format(sorted(input_sources)))
+    if input_sources != {input_source_mode(snapshot)}:
+        raise ValueError("archive input source differs from its catalog inventory snapshot")
     return {
         "complete": True,
         "runs": len(records),
@@ -888,6 +957,7 @@ def verify_all(local_root, root_verifier=None):
         "source_entries": total_entries,
         "kept_entries": total_kept,
         "ad_selection": modes.pop(),
+        "input_source": input_sources.pop(),
         "artifacts": total_artifacts,
         "bytes": total_bytes,
         "local_root": str(local_root),
@@ -912,9 +982,10 @@ def sync_run(alias, remote_result, local_root, mount_root):
     final = local_root / remote_result["period"] / remote_result["hall"] / remote_result["stem"]
     if final.exists():
         verified = verify_local_run(final)
-        if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"]) != (
+        if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"],
+                verified["input_source"]) != (
                 remote_result["catalog_sha256"], remote_result["schema_version"],
-                remote_result["selection"]["mode"]):
+                remote_result["selection"]["mode"], input_source_mode(remote_result)):
             raise ValueError("existing local run does not match the remote run")
         return verified
     final.parent.mkdir(parents=True, exist_ok=True)
@@ -932,9 +1003,10 @@ def sync_run(alias, remote_result, local_root, mount_root):
     run_command(command)
     validate_local_mount(local_root, mount_root)
     verified = verify_local_run(incoming)
-    if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"]) != (
+    if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"],
+            verified["input_source"]) != (
             remote_result["catalog_sha256"], remote_result["schema_version"],
-            remote_result["selection"]["mode"]):
+            remote_result["selection"]["mode"], input_source_mode(remote_result)):
         raise ValueError("copied local run does not match the remote run")
     os.replace(str(incoming), str(final))
     verified["directory"] = str(final)
@@ -1001,8 +1073,8 @@ def command_run(args):
     if bad:
         raise RuntimeError("{} catalogs are unreadable; refusing an incomplete production run".format(len(bad)))
     selected = selected_records(records, args)
-    print("selected_runs={} selected_inputs={}".format(
-        len(selected), sum(record["input_count"] for record in selected)))
+    print("selected_runs={} selected_inputs={} input_source={}".format(
+        len(selected), sum(record["input_count"] for record in selected), args.input_source))
     if not args.execute:
         print("DRY RUN ONLY: no staging, submission, transfer, or deletion performed")
         return 0
@@ -1019,7 +1091,7 @@ def command_run(args):
         raise ValueError("remote deletion requires --confirm-remote-delete {}".format(
             DELETE_CONFIRMATION))
     local_root = validate_local_mount(args.local_root, args.mount_root)
-    save_inventory_snapshot(local_root, records)
+    save_inventory_snapshot(local_root, records, args.input_source)
 
     for index, record in enumerate(selected, 1):
         print("[{}/{}] {} {} {}".format(index, len(selected), record["period"],
@@ -1027,9 +1099,10 @@ def command_run(args):
         local_run = local_root / record["period"] / record["hall"] / record["stem"]
         if local_run.exists():
             existing = verify_local_run(local_run)
-            if (existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"]) != (
-                    record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection):
-                raise ValueError("existing local run does not match the fixed catalog/schema/selection")
+            if (existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"],
+                    existing["input_source"]) != (
+                    record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection, args.input_source):
+                raise ValueError("existing local run does not match the fixed catalog/schema/selection/input source")
             print("already verified locally; skipping cluster processing", flush=True)
             continue
         prepare_args = [
@@ -1037,6 +1110,7 @@ def command_run(args):
             "--hall", record["hall"], "--stage-root", args.remote_stage_root,
             "--code-root", args.remote_code_root, "--files-per-job", str(args.files_per_job),
             "--ad-selection", args.ad_selection,
+            "--input-source", args.input_source,
         ]
         marker, _ = remote_json(args.alias, args.remote_code_root, prepare_args)
         status, _ = remote_json(args.alias, args.remote_code_root, [
@@ -1107,6 +1181,8 @@ def build_parser():
     run.add_argument("--run-pattern")
     run.add_argument("--limit-runs", type=int)
     run.add_argument("--files-per-job", type=int, default=16)
+    run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,
+                     help="mini (default): IHEP All-mini files; recon: original fixed-catalog paths")
     run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="on",
                      help="on: keep AD entries above 0.7 MeV plus every other detector; "
                           "off: keep every entry (band counts are still recorded)")
@@ -1152,9 +1228,10 @@ def build_parser():
     prepare.add_argument("--code-root", required=True)
     prepare.add_argument("--files-per-job", type=int, required=True)
     prepare.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="on")
+    prepare.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE)
     prepare.set_defaults(function=lambda args: print(json.dumps(prepare_run(
         args.catalog, args.period, args.hall, args.stage_root, args.code_root,
-        args.files_per_job, ad_selection=args.ad_selection))) or 0)
+        args.files_per_job, ad_selection=args.ad_selection, input_source=args.input_source))) or 0)
 
     submit = commands.add_parser("_submit")
     submit.add_argument("--run-dir", required=True)

@@ -1,0 +1,61 @@
+# General scientific-publication starting style
+# Reused from Scientific Agent Skills scientific-visualization (MIT).
+# Reviewed with Matplotlib 3.11.1 on 2026-07-23.
+# This is not a journal-compliance profile.
+
+figure.dpi: 100
+figure.facecolor: white
+figure.autolayout: False
+figure.constrained_layout.use: False
+figure.figsize: 3.5, 2.5
+
+font.size: 8
+font.family: sans-serif
+font.sans-serif: Arial, Helvetica, DejaVu Sans
+
+axes.linewidth: 0.6
+axes.labelsize: 8
+axes.titlesize: 8
+axes.labelweight: normal
+axes.spines.top: False
+axes.spines.right: False
+axes.spines.left: True
+axes.spines.bottom: True
+axes.edgecolor: black
+axes.labelcolor: black
+axes.axisbelow: True
+axes.grid: False
+axes.prop_cycle: cycler('color', ['0072B2', 'D55E00', '009E73', 'CC79A7', '000000'])
+
+xtick.major.size: 3
+xtick.minor.size: 2
+xtick.major.width: 0.6
+xtick.minor.width: 0.5
+xtick.labelsize: 7
+xtick.direction: out
+ytick.major.size: 3
+ytick.minor.size: 2
+ytick.major.width: 0.6
+ytick.minor.width: 0.5
+ytick.labelsize: 7
+ytick.direction: out
+
+lines.linewidth: 1.5
+lines.markersize: 4
+lines.markeredgewidth: 0.5
+legend.fontsize: 7
+legend.frameon: False
+legend.loc: best
+
+savefig.dpi: 300
+savefig.format: pdf
+savefig.bbox: standard
+savefig.pad_inches: 0.05
+savefig.transparent: False
+savefig.facecolor: white
+savefig.edgecolor: white
+pdf.fonttype: 42
+ps.fonttype: 42
+svg.fonttype: none
+image.cmap: viridis
+image.aspect: auto

@@ -76,6 +76,42 @@ scan. Treat the 4,087 as unlisted candidates for follow-up, not as confirmed
 currently unreadable files or missing runs. Branch compatibility alone does
 not make the archive a verified complete replacement.
 
+## Bounded conversion check
+
+After making mini inputs the default, one sampled mini-file (P21A/EH3,
+run 82379/file 0092) was copied into a local temporary directory. Its local
+and remote SHA-256 hashes matched. Conversion with `dyb-slim-v3` and AD
+selection on produced 447,335 retained entries from 828,122 input entries;
+72,336,505 input bytes became 16,984,510 output bytes. Results and
+double-precision timing fields are in `conversion-check.json`.
+
+The output reopened successfully with `slim-root --verify`, including
+selection, provenance and timestamp/duration accounting. The independent
+`compare.C` check read every retained entry and compared all 19 input
+branches, their scalar ROOT types, event order, and the generated run number.
+All matched. Finite values and infinities are compared exactly; NaNs compare
+as both-NaN, not by payload bits. This checks mini-to-slim conversion, not
+mini-to-original event equivalence or complete availability.
+
+The local macOS/arm64 test used ROOT tooling reporting 6.40.04. Its single
+file took about 1.79 s wall and 1.76 s CPU including output finalization;
+these are not IHEP worker measurements and must not be extrapolated into
+cluster CPU-days. The temporary data are test copies, not an archived run.
+The ten repository tests also passed, including a synthetic mini-input
+worker/finalize/archive/cleanup chain and legacy-recon verification.
+
+For a local copy of this input, create a one-line absolute-path `sample.list`
+and run from the repository root (output paths must not already exist):
+
+```bash
+bin/slim-root --input-list /temporary/sample.list \
+  --output /temporary/slim.root --source-report /temporary/sources.tsv \
+  --run-number 82379 --ad-selection on
+bin/slim-root --verify /temporary/slim.root
+root -l -b -n -q \
+  'estimates/mini-branches-2026-09-27/compare.C("/temporary/input.root","/temporary/slim.root",82379)'
+```
+
 ## Reproduce
 
 From the repository on the local machine:

@@ -52,11 +52,26 @@ backups=4009 inputs=831334`. It exits nonzero if the snapshot is incomplete or
 any checksum, period, hall, run identity, or source path fails validation. Do
 not bypass this gate.
 
+`inventory` validates catalogs, not current ROOT-file availability. Conversion
+defaults to `--input-source mini`, using `/lustrefs/juno26/dyw/rec/All-mini`
+with the exact run/file/version identities from those catalogs. New-run
+preparation opens every mapped source and checks its four-byte ROOT signature
+before staging. Unavailable inputs stop the run; no file is silently skipped
+or replaced. The September 2 mini index leaves 4,087 required paths unlisted;
+see `estimates/mini-branches-2026-09-27/`. A dry run does not open source files.
+
+For an explicit original-reconstruction campaign, use `--input-source recon`.
+Use one source per local archive. The archive snapshot and run metadata pin
+the choice; restarting with a different source is refused. Older schema-3
+archives without this field are interpreted as recon. Deploy the updated
+`preserve.py` before using the new default on the cluster.
+
 ## Staging without a writable `/dybfs2`
 
 On 2026-09-03 `/dybfs2` was mounted read-only on every login node and on the
-compute nodes, and it was 97% full. The pipeline needs `/dybfs2` only for
-reading the sources (`/dybfs` is a symlink into it); the code root and the
+compute nodes, and it was 97% full. Original `recon` inputs use `/dybfs2`
+(`/dybfs` is a symlink into it); the new default reads `/lustrefs/juno26/dyw`.
+The code root and the
 staging root can live on the scratch Lustre pool instead. A worker probe job
 that day (cluster 81006673 on node cws048) confirmed that compute nodes write
 to `/scratchfs2/dyw/lijj16`, read the `/dybfs` sources, load the LCG 110 view
@@ -80,8 +95,14 @@ python3 preserve.py run --remote-code-root $CODE --remote-stage-root $STAGE \
 
 The converter still deployed under `/dybfs2` is `dyb-slim-v2`; the selection
 in this repository requires deploying `dyb-slim-v3` to the new code root
-first. Sources that fail to stat (see `estimates/raw-size-2026-09-03/`) make
-their chunk fail; such runs stay in staging until the storage is repaired.
+first, together with the updated `preserve.py`. No deployment or production
+start was performed by the September 27 input-default change. The earlier
+worker probe did not test compute-node readability of `/lustrefs/juno26/dyw`;
+verify it in the authorized pilot. A one-file local mini conversion passed
+reopening and all retained-value comparisons; see
+`estimates/mini-branches-2026-09-27/conversion-check.json`. This does not replace
+the compute-node check. Inputs becoming unreadable after preparation
+make their chunk fail; the run stays in staging until storage is repaired.
 
 ## Dry run and first one-run pilot
 
@@ -124,7 +145,7 @@ python3 preserve.py run \
   --confirm-remote-delete DELETE-VERIFIED-RUN
 ```
 
-Defaults are 16 source files per task, the AD energy selection on
+Defaults are mini inputs, 16 source files per task, the AD energy selection on
 (`--ad-selection on`; `off` keeps every entry), HepJob group `dyw`, `short`
 walltime, 1,024 MB memory, two submission attempts, and a two-hour per-run
 wait. Override only after measured evidence from the production pilot. Use one
@@ -136,7 +157,7 @@ selection mode for the whole archive: `verify-all` rejects a mixed archive and
 - Re-run the same command after an SSH interruption or failed task. The run
   marker fixes the catalog and chunking; valid outputs and timing reports are
   reopened, verified, and skipped.
-- A catalog checksum, period, hall, `--files-per-job`, or `--ad-selection`
+- A catalog checksum, period, hall, `--files-per-job`, `--input-source`, or `--ad-selection`
   mismatch is refused.
 - All 4,009 catalogs are rehashed and checked for exact period, hall, run,
   source-path identity, and duplicate paths before they can be staged.
@@ -157,8 +178,8 @@ selection mode for the whole archive: `verify-all` rejects a mixed archive and
 | --- | --- |
 | `fileIndex` | zero-based index in the run catalog |
 | `chunkIndex`, `sourceIndex` | output chunk and index within that chunk |
-| `path` | original absolute ROOT path |
-| `entries`, `inputBytes` | source event count before selection and original byte count |
+| `path` | actual absolute input path: minirecon by default, recon in explicit original mode |
+| `entries`, `inputBytes` | actual input event count before our selection and input byte count |
 | `firstTriggerTimeSec/NanoSec` | earliest trigger timestamp in the source |
 | `lastTriggerTimeSec/NanoSec` | latest trigger timestamp in the source |
 | `dataDurationSeconds` | `(latest_ns - earliest_ns) / 1e9` as a double |
@@ -173,6 +194,11 @@ recomputable without subtracting large floating-point epoch values; they cover
 every trigger in the source, including dropped AD entries. With the selection
 on, `entries = keptEntries + sum of the eight AD counts` for every row; with it
 off, `keptEntries = entries` and the counts are informational.
+
+`catalog.list` retains the original fixed recon paths. Verification maps those
+paths using the recorded input source before comparing the duration rows.
+Mini input byte counts and durations describe the actual mini files, not an
+unmeasured original file. This tool cannot undo an upstream mini-file selection.
 
 ## Completeness verification
 

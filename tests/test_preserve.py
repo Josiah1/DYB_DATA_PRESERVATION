@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import preserve
 
@@ -30,7 +31,8 @@ class PreserveTests(unittest.TestCase):
         self.assertTrue(all(
             record["catalog_source"] == "repository-backup" for record in records))
 
-    def test_prepare_chunks_and_resume(self):
+    @mock.patch("preserve.check_input_files")
+    def test_prepare_chunks_and_resume(self, check_inputs):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             catalog = root / "run12345.list"
@@ -40,7 +42,7 @@ class PreserveTests(unittest.TestCase):
             code = root / "remote" / "code"
             marker = preserve.prepare_run(
                 str(catalog), "P17B", "EH1", str(stage), str(code), 2,
-                require_registered=False,
+                require_registered=False, input_source="recon",
             )
             self.assertEqual(marker["input_count"], 5)
             self.assertEqual(marker["chunk_count"], 3)
@@ -52,12 +54,55 @@ class PreserveTests(unittest.TestCase):
             self.assertEqual(marker["selection"], preserve.selection_record("on"))
             self.assertEqual(
                 preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 2,
-                                     require_registered=False)["catalog_sha256"],
+                                     require_registered=False, input_source="recon")["catalog_sha256"],
                 marker["catalog_sha256"],
             )
             with self.assertRaisesRegex(ValueError, "does not match"):
                 preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 2,
-                                     require_registered=False, ad_selection="off")
+                                     require_registered=False, ad_selection="off", input_source="recon")
+
+    def test_mini_inputs_preserve_catalog_identity_and_fail_on_missing_files(self):
+        canonical = ("/dybfs/rec/P21A/rec/runs_0082000/runs_0082300/run_0082379/"
+                     "recon.Neutrino.0082379.Physics.EH3-Merged.P21A-I._0092.root")
+        expected = (preserve.MINI_ROOT + "/runs_0082000/runs_0082300/run_0082379/"
+                    "minirecon.Neutrino.0082379.Physics.EH3-Merged.P21A-I._0092.root")
+        self.assertEqual(preserve.resolve_inputs([canonical]), [expected])
+        self.assertEqual(preserve.resolve_inputs([canonical], "recon"), [canonical])
+        self.assertEqual(preserve.resolve_inputs([canonical.replace('Neutrino', 'NoTag')]),
+                         [expected.replace('Neutrino', 'NoTag')])
+        for malformed in (canonical.replace('/rec/P21A/', '/rec/P17B/'),
+                          canonical.replace('/run_0082379/', '/run_0082380/'),
+                          canonical.replace('/rec/runs_', '/rec/../runs_')):
+            with self.assertRaisesRegex(ValueError, "cannot map"):
+                preserve.resolve_inputs([malformed])
+        args = preserve.build_parser().parse_args([
+            "run", "--local-root", "/Volumes/test/data", "--mount-root", "/Volumes/test"])
+        self.assertEqual(args.input_source, "mini")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            catalog = root / "run82379.list"
+            catalog.write_text(canonical + "\n")
+            stage, code = root / "stage", root / "code"
+            with mock.patch.object(preserve, "MINI_ROOT", str(root / "mini")):
+                mini = Path(preserve.resolve_inputs([canonical])[0])
+                with self.assertRaisesRegex(ValueError, "1 unavailable inputs"):
+                    preserve.prepare_run(str(catalog), "P21A", "EH3", str(stage), str(code), 16,
+                                         require_registered=False)
+                self.assertFalse(stage.exists())
+                mini.parent.mkdir(parents=True)
+                mini.write_bytes(b"not ROOT")
+                with self.assertRaisesRegex(ValueError, "not a ROOT file header"):
+                    preserve.check_input_files([str(mini)])
+                mini.write_bytes(b"root synthetic header")
+                marker = preserve.prepare_run(str(catalog), "P21A", "EH3", str(stage), str(code), 16,
+                                              require_registered=False)
+                run_dir = Path(marker["run_dir"])
+                self.assertEqual(marker["input_source"], "mini")
+                self.assertEqual((run_dir / "catalog.list").read_bytes(), catalog.read_bytes())
+                self.assertEqual((run_dir / "chunks/000000.list").read_text(), str(mini) + "\n")
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    preserve.prepare_run(str(catalog), "P21A", "EH3", str(stage), str(code), 16,
+                                         require_registered=False, input_source="recon")
 
     def test_local_verification_detects_tampering(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -67,7 +112,8 @@ class PreserveTests(unittest.TestCase):
             output_dir.mkdir(parents=True)
             output = output_dir / "chunk.slim.000000.root"
             output.write_bytes(b"verified bytes")
-            catalog_path = "/dybfs/rec/input.root"
+            catalog_path = ("/dybfs/rec/P17B/rec/runs_0021000/runs_0021200/run_0021221/"
+                            "recon.Neutrino.0021221.Physics.EH1-Merged.P17B-I._0001.root")
             catalog = run_dir / "catalog.list"
             catalog.write_text(catalog_path + "\n", encoding="utf-8")
             duration = run_dir / "durations.tsv"
@@ -116,11 +162,39 @@ class PreserveTests(unittest.TestCase):
             everything = preserve.verify_all(archive)
             self.assertEqual((everything["runs"], everything["kept_entries"],
                               everything["ad_selection"]), (1, 1, "on"))
+            self.assertEqual(everything["input_source"], "recon")
+            result = preserve.load_json(run_dir / "run.json")
+            remote_result = dict(result, input_source="mini", period="P17B", hall="EH1")
+            with mock.patch("preserve.validate_local_mount", return_value=archive):
+                with self.assertRaisesRegex(ValueError, "does not match the remote run"):
+                    preserve.sync_run("unused", remote_result, archive, archive)
+            mini_path = preserve.resolve_inputs([catalog_path])[0]
+            duration.write_text(duration.read_text().replace(catalog_path, mini_path))
+            result.update(input_source="mini", artifact_bytes=output.stat().st_size + duration.stat().st_size)
+            preserve.atomic_json(run_dir / "run.json", result)
+            (run_dir / "SHA256SUMS").write_text(
+                "{}  outputs/chunk.slim.000000.root\n{}  durations.tsv\n".format(
+                    preserve.sha256_file(output), preserve.sha256_file(duration)))
+            snapshot = preserve.load_json(archive / "catalog-inventory.json")
+            with self.assertRaisesRegex(ValueError, "differs from its catalog inventory"):
+                preserve.verify_all(archive)
+            snapshot["input_source"] = "mini"
+            preserve.atomic_json(archive / "catalog-inventory.json", snapshot)
+            self.assertEqual(preserve.verify_all(archive)["input_source"], "mini")
+            with self.assertRaisesRegex(ValueError, "input source differs"):
+                preserve.save_inventory_snapshot(archive, snapshot["records"], "recon")
+            result["input_source"] = "recon"
+            preserve.atomic_json(run_dir / "run.json", result)
+            with self.assertRaisesRegex(ValueError, "order does not match"):
+                preserve.verify_local_run(run_dir)
+            result["input_source"] = "mini"
+            preserve.atomic_json(run_dir / "run.json", result)
             output.write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 preserve.verify_local_run(run_dir)
 
-    def test_duration_reports_are_aggregated_in_catalog_order(self):
+    @mock.patch("preserve.check_input_files")
+    def test_duration_reports_are_aggregated_in_catalog_order(self, check_inputs):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             catalog = root / "run12345.list"
@@ -128,7 +202,7 @@ class PreserveTests(unittest.TestCase):
             catalog.write_text("\n".join(inputs) + "\n", encoding="utf-8")
             marker = preserve.prepare_run(
                 str(catalog), "P17B", "EH1", str(root / "stage"), str(root / "code"), 2,
-                require_registered=False,
+                require_registered=False, input_source="recon",
             )
             run_dir = Path(marker["run_dir"])
             header = "\t".join(preserve.SOURCE_REPORT_COLUMNS) + "\n"
@@ -164,6 +238,9 @@ class PreserveTests(unittest.TestCase):
             duration.write_text("\n".join(original) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "selection accounting"):
                 preserve.validate_duration_table(duration, inputs, 2, mode="off")
+            (run_dir / "chunks/000000.list").write_text("/wrong/input.root\n")
+            with self.assertRaisesRegex(ValueError, "chunk paths do not match"):
+                preserve.aggregate_duration_reports(run_dir, marker, "run12345")
 
     def test_selection_records_and_verify_lines(self):
         self.assertEqual(preserve.selection_mode(preserve.selection_record("off")), "off")
@@ -183,7 +260,8 @@ class PreserveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "did not report"):
             preserve.parse_verify_output("VERIFY entries=14 sources=2\n")
 
-    def test_cleanup_is_marker_and_checksum_gated(self):
+    @mock.patch("preserve.check_input_files")
+    def test_cleanup_is_marker_and_checksum_gated(self, check_inputs):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             catalog = root / "run54321.list"
@@ -192,7 +270,7 @@ class PreserveTests(unittest.TestCase):
             code = root / "remote" / "code"
             marker = preserve.prepare_run(
                 str(catalog), "P17B", "EH1", str(stage), str(code), 1,
-                require_registered=False,
+                require_registered=False, input_source="recon",
             )
             run_dir = Path(marker["run_dir"])
             with self.assertRaisesRegex(ValueError, "not been finalized"):

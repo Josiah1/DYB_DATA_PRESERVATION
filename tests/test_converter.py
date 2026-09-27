@@ -11,6 +11,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import preserve
 
@@ -195,10 +196,22 @@ class ConverterTests(unittest.TestCase):
     def test_worker_finalize_and_archive_completeness_chain(self):
         stage = self.root / "stage"
         catalog = self.root / "run7777.list"
-        catalog.write_text("\n".join(self.sources) + "\n")
+        mini_root = self.root / "mini"
+        patcher = mock.patch.object(preserve, "MINI_ROOT", str(mini_root))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        canonical = [
+            "/dybfs/rec/P17B/rec/runs_0007000/runs_0007700/run_0007777/"
+            "recon.Neutrino.0007777.Physics.EH1-Merged.P17B-I._{:04d}.root".format(index + 1)
+            for index in range(len(self.sources))]
+        for source, mini in zip(self.sources, preserve.resolve_inputs(canonical)):
+            Path(mini).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, mini)
+        catalog.write_text("\n".join(canonical) + "\n")
         marker = preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(PROJECT), 1,
                                       require_registered=False)
         run_dir = Path(marker["run_dir"])
+        self.assertEqual(marker["input_source"], "mini")
         for proc_id in range(marker["chunk_count"]):
             for _ in range(2):  # second pass must reopen, verify, and skip the finished chunk
                 subprocess.run(["bash", str(PROJECT / "scripts" / "worker.sh"), str(run_dir),
@@ -217,6 +230,7 @@ class ConverterTests(unittest.TestCase):
         (stage / "catalog-inventory.json").write_text(preserve.json.dumps({
             "kind": "dyb-preserve-catalog-inventory",
             "schema_version": preserve.SCHEMA_VERSION,
+            "input_source": "mini",
             "records": [{
                 "period": "P17B", "hall": "EH1", "stem": "run7777", "catalog": str(catalog),
                 "catalog_sha256": marker["catalog_sha256"], "input_count": 2,
