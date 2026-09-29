@@ -71,6 +71,16 @@ unmounted/replaced disk, unreadable input, failed chunk, or checksum mismatch
 stops the controller. This sample-based capacity estimate does not establish
 archive-wide input availability or lossless TWin physics equivalence.
 
+Record unexpected input access failures in [INPUT_ISSUES.md](INPUT_ISSUES.md)
+and [input-issues.json](input-issues.json), with copies in the destination's
+`provenance/` directory. Include exact catalog identity, attempted mini/original
+paths, observation time, errors, and whether the original was preserved or the
+input remains unavailable. Retain recovered-mini failures as provenance. At
+campaign close, reconcile the record with all 831,334 expected inputs and state
+any unassessed remainder; do not describe a partial check as the final missing
+file list. The current record is a manually refreshed snapshot, not an automatic
+collector. The controller still stops when neither input source is readable.
+
 Schema-3 / 0.7-MeV archives require the previous toolchain at `5479aef`;
 start new staging and a new destination for schema 4. Do not relabel old counts.
 

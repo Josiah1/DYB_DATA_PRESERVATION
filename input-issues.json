@@ -1,0 +1,376 @@
+{
+  "kind": "dyb-input-issues",
+  "report_version": 1,
+  "updated_at": "2026-09-29T17:28:32+00:00",
+  "final": false,
+  "catalog_check_complete": false,
+  "disk_uuid": "2A4F48F8BDFEE355",
+  "archive_root": "/media/josiah/LAYJ萤捷1/DYB_DATA_PRESERVATION",
+  "scope": "Recorded fallback observations from completed runs plus a live header check of every required input in P17B/EH1/run21540. Other unprocessed runs have not been assessed.",
+  "summary": {
+    "expected_runs": 4009,
+    "expected_inputs": 831334,
+    "completed_runs": 11,
+    "preserved_inputs": 2763,
+    "additional_runs_checked": 1,
+    "additional_inputs_checked": 126,
+    "inputs_not_yet_assessed": 828445,
+    "recorded_mini_access_failures": 14,
+    "preserved_from_exact_recon": 12,
+    "original_header_readable_not_processed": 1,
+    "unavailable_inputs": 1
+  },
+  "completed_runs": [
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21221",
+      "catalog_sha256": "0da55b5774484a0ca765727f6edbaea0e834b85e55d410002102e33477357ef5",
+      "input_count": 217,
+      "completed_at": "2026-09-29T10:18:27+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21228",
+      "catalog_sha256": "93c6c994e17528a6c6a95478042cffbe9679f61a136db2cd31f7cf7ca135f4d7",
+      "input_count": 294,
+      "completed_at": "2026-09-29T10:49:17+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21235",
+      "catalog_sha256": "abe03c090a7bb344c746e8562fd12c239aa14be50a96fff023e6e8ee4f93f7ea",
+      "input_count": 303,
+      "completed_at": "2026-09-29T11:03:10+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21349",
+      "catalog_sha256": "99125f85bf66ff6aab4f501503b381955a31d252824c126055d5fd7fe12398d4",
+      "input_count": 241,
+      "completed_at": "2026-09-29T11:17:31+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21358",
+      "catalog_sha256": "5b53d7ca73ebe367c00cadb30f642a0cc4262f0266bff2078b13533f949dbb98",
+      "input_count": 303,
+      "completed_at": "2026-09-29T11:30:41+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21367",
+      "catalog_sha256": "2b73f0d941edc56d1326b7313e03e8e4e5b078826e4475949e566bc6da8276f9",
+      "input_count": 303,
+      "completed_at": "2026-09-29T11:46:15+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21374",
+      "catalog_sha256": "28bfa6981f19919e027a738ff55e37f0d4fcaad602ecf48266b449b357c04f0e",
+      "input_count": 151,
+      "completed_at": "2026-09-29T12:00:11+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21505",
+      "catalog_sha256": "584282404fbccc6fba95a406352351c4a2b797ed35072696a5a819ca4f92d305",
+      "input_count": 242,
+      "completed_at": "2026-09-29T12:13:08+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21508",
+      "catalog_sha256": "1762c01a32bd2ca8f6e7aa75ba5cda9c5a8938421d6f3e3f131cc160c881ccc8",
+      "input_count": 302,
+      "completed_at": "2026-09-29T12:28:11+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21520",
+      "catalog_sha256": "81da5b75a3931c2a523665b5f07bfb5bb8c13b0be2016f44c3d5dc72b9cb7d9c",
+      "input_count": 295,
+      "completed_at": "2026-09-29T12:42:15+00:00"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "stem": "run21530",
+      "catalog_sha256": "b703814d6a91e125593fa89bf1d7e3780546264aad8b81b95f1adb2deab3f9a8",
+      "input_count": 112,
+      "completed_at": "2026-09-29T12:56:59+00:00"
+    }
+  ],
+  "additional_check": {
+    "observed_at": "2026-09-29T17:28:04+00:00",
+    "host": "lxlogin001.ihep.ac.cn",
+    "period": "P17B",
+    "hall": "EH1",
+    "run": "run21540",
+    "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21540.list",
+    "catalog_backup": "P17B/EH1/run21540.list",
+    "catalog_sha256": "6118010f3bd8f072291a3e314c7fd7644b129ed3cca8df616d027c10e628c0de",
+    "expected_inputs": 126,
+    "check": "Open each mini and read its four-byte ROOT header; attempt the exact original when the mini fails. No complete ROOT content read."
+  },
+  "issues": [
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21228",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21228.list",
+      "catalog_sha256": "93c6c994e17528a6c6a95478042cffbe9679f61a136db2cd31f7cf7ca135f4d7",
+      "catalog_index": 199,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021200/run_0021228/recon.Neutrino.0021228.Physics.EH1-Merged.P17B-I._0200.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021200/run_0021228/minirecon.Neutrino.0021228.Physics.EH1-Merged.P17B-I._0200.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021200/run_0021228/minirecon.Neutrino.0021228.Physics.EH1-Merged.P17B-I._0200.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021200/run_0021228/minirecon.Neutrino.0021228.Physics.EH1-Merged.P17B-I._0200.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T10:42:33+00:00",
+      "evidence": "data/P17B/EH1/run21228/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21235",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21235.list",
+      "catalog_sha256": "abe03c090a7bb344c746e8562fd12c239aa14be50a96fff023e6e8ee4f93f7ea",
+      "catalog_index": 74,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021200/run_0021235/recon.Neutrino.0021235.Physics.EH1-Merged.P17B-I._0076.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021200/run_0021235/minirecon.Neutrino.0021235.Physics.EH1-Merged.P17B-I._0076.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021200/run_0021235/minirecon.Neutrino.0021235.Physics.EH1-Merged.P17B-I._0076.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021200/run_0021235/minirecon.Neutrino.0021235.Physics.EH1-Merged.P17B-I._0076.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T10:56:04+00:00",
+      "evidence": "data/P17B/EH1/run21235/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21358",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21358.list",
+      "catalog_sha256": "5b53d7ca73ebe367c00cadb30f642a0cc4262f0266bff2078b13533f949dbb98",
+      "catalog_index": 55,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021300/run_0021358/recon.Neutrino.0021358.Physics.EH1-Merged.P17B-I._0056.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021358/minirecon.Neutrino.0021358.Physics.EH1-Merged.P17B-I._0056.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021358/minirecon.Neutrino.0021358.Physics.EH1-Merged.P17B-I._0056.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021358/minirecon.Neutrino.0021358.Physics.EH1-Merged.P17B-I._0056.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T11:23:14+00:00",
+      "evidence": "data/P17B/EH1/run21358/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21367",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21367.list",
+      "catalog_sha256": "2b73f0d941edc56d1326b7313e03e8e4e5b078826e4475949e566bc6da8276f9",
+      "catalog_index": 213,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021300/run_0021367/recon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0216.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0216.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0216.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0216.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T11:38:19+00:00",
+      "evidence": "data/P17B/EH1/run21367/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21367",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21367.list",
+      "catalog_sha256": "2b73f0d941edc56d1326b7313e03e8e4e5b078826e4475949e566bc6da8276f9",
+      "catalog_index": 256,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021300/run_0021367/recon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0259.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0259.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0259.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0259.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T11:38:19+00:00",
+      "evidence": "data/P17B/EH1/run21367/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21367",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21367.list",
+      "catalog_sha256": "2b73f0d941edc56d1326b7313e03e8e4e5b078826e4475949e566bc6da8276f9",
+      "catalog_index": 300,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021300/run_0021367/recon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0303.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0303.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0303.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021300/run_0021367/minirecon.Neutrino.0021367.Physics.EH1-Merged.P17B-I._0303.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T11:38:19+00:00",
+      "evidence": "data/P17B/EH1/run21367/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21505",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21505.list",
+      "catalog_sha256": "584282404fbccc6fba95a406352351c4a2b797ed35072696a5a819ca4f92d305",
+      "catalog_index": 5,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021505/recon.Neutrino.0021505.Physics.EH1-Merged.P17B-I._0006.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021505/minirecon.Neutrino.0021505.Physics.EH1-Merged.P17B-I._0006.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021505/minirecon.Neutrino.0021505.Physics.EH1-Merged.P17B-I._0006.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021505/minirecon.Neutrino.0021505.Physics.EH1-Merged.P17B-I._0006.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T12:03:43+00:00",
+      "evidence": "data/P17B/EH1/run21505/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21508",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21508.list",
+      "catalog_sha256": "1762c01a32bd2ca8f6e7aa75ba5cda9c5a8938421d6f3e3f131cc160c881ccc8",
+      "catalog_index": 39,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021508/recon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0041.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0041.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0041.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0041.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T12:18:45+00:00",
+      "evidence": "data/P17B/EH1/run21508/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21508",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21508.list",
+      "catalog_sha256": "1762c01a32bd2ca8f6e7aa75ba5cda9c5a8938421d6f3e3f131cc160c881ccc8",
+      "catalog_index": 136,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021508/recon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0139.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0139.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0139.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0139.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T12:18:45+00:00",
+      "evidence": "data/P17B/EH1/run21508/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21508",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21508.list",
+      "catalog_sha256": "1762c01a32bd2ca8f6e7aa75ba5cda9c5a8938421d6f3e3f131cc160c881ccc8",
+      "catalog_index": 212,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021508/recon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0217.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0217.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0217.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021508/minirecon.Neutrino.0021508.Physics.EH1-Merged.P17B-I._0217.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T12:18:45+00:00",
+      "evidence": "data/P17B/EH1/run21508/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21520",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21520.list",
+      "catalog_sha256": "81da5b75a3931c2a523665b5f07bfb5bb8c13b0be2016f44c3d5dc72b9cb7d9c",
+      "catalog_index": 53,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021520/recon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0065.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021520/minirecon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0065.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021520/minirecon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0065.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021520/minirecon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0065.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T12:35:05+00:00",
+      "evidence": "data/P17B/EH1/run21520/run.json"
+    },
+    {
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21520",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21520.list",
+      "catalog_sha256": "81da5b75a3931c2a523665b5f07bfb5bb8c13b0be2016f44c3d5dc72b9cb7d9c",
+      "catalog_index": 173,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021520/recon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0185.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021520/minirecon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0185.root",
+      "mini_error": {
+        "message": "1 unavailable inputs; no files skipped or substituted. Examples: [\"/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021520/minirecon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0185.root: [Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021520/minirecon.Neutrino.0021520.Physics.EH1-Merged.P17B-I._0185.root'\"]"
+      },
+      "original_error": null,
+      "status": "preserved_from_exact_recon",
+      "observed_at": "2026-09-29T12:35:05+00:00",
+      "evidence": "data/P17B/EH1/run21520/run.json"
+    },
+    {
+      "catalog_index": 58,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021540/recon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0103.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021540/minirecon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0103.root",
+      "mini_error": {
+        "path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021540/minirecon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0103.root",
+        "error_type": "FileNotFoundError",
+        "errno": 2,
+        "message": "[Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021540/minirecon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0103.root'"
+      },
+      "original_error": {
+        "path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021540/recon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0103.root",
+        "error_type": "OSError",
+        "errno": 5,
+        "message": "[Errno 5] Input/output error"
+      },
+      "status": "unavailable",
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21540",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21540.list",
+      "catalog_sha256": "6118010f3bd8f072291a3e314c7fd7644b129ed3cca8df616d027c10e628c0de",
+      "observed_at": "2026-09-29T17:28:04+00:00",
+      "evidence": "live read-only ROOT-header check on lxlogin001.ihep.ac.cn"
+    },
+    {
+      "catalog_index": 112,
+      "catalog_path": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021540/recon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0159.root",
+      "mini_path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021540/minirecon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0159.root",
+      "mini_error": {
+        "path": "/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021540/minirecon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0159.root",
+        "error_type": "FileNotFoundError",
+        "errno": 2,
+        "message": "[Errno 2] No such file or directory: '/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021540/minirecon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0159.root'"
+      },
+      "original_error": null,
+      "status": "original_header_readable_not_processed",
+      "period": "P17B",
+      "hall": "EH1",
+      "run": "run21540",
+      "catalog": "/dybfs2/rec/P17B/goodrunlist_p17b_v4/good_v4_sync.ihep/EH1/run21540.list",
+      "catalog_sha256": "6118010f3bd8f072291a3e314c7fd7644b129ed3cca8df616d027c10e628c0de",
+      "observed_at": "2026-09-29T17:28:04+00:00",
+      "evidence": "live read-only ROOT-header check on lxlogin001.ihep.ac.cn"
+    }
+  ]
+}
