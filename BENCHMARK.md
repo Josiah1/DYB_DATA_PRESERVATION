@@ -2,12 +2,14 @@
 
 The current no-energy-cut IHEP-mini benchmark is documented in
 [`estimates/noenergy-2026-09-27/`](estimates/noenergy-2026-09-27/README.md).
-It measures the unchanged converter with `--ad-selection off` and compares
-five lossless compression alternatives. Production defaults are unchanged.
+It measured the then-current ZSTD-7 converter with `--ad-selection off` and
+five lossless alternatives. On September 28, ZSTD 9 / 256 KiB baskets and
+selection off were adopted as defaults; the historical measurements below
+are unchanged. See [TWin compatibility](TWIN_COMPATIBILITY.md) for the new pilot.
 
 ## Current all-event estimate: IHEP minis, 2026-09-27
 
-**Without an energy cut, estimate 19.02 TB with the current converter, or
+**Without an energy cut, estimate 18.59 TB with the adopted ZSTD-9/256-KiB setting, or
 16.69 TB with the tested ROOT/LZMA alternative. Plan for 25 TB of usable
 destination space for one archive copy.** A 10 TB target was not achieved
 by any tested lossless option; 50 TB is not needed for the compressed copy.
@@ -24,39 +26,40 @@ The population is the complete fixed-catalog set of **831,334 files**.
 Each data-version/hall/stream is weighted by its exact file count; alternatives
 use a paired size ratio within each of the 20 strata.
 
-| Lossless configuration, all events retained | Projected TB | Change from current ROOT |
+| Lossless configuration, all events retained | Projected TB | Change from old baseline |
 | --- | ---: | ---: |
-| Current ROOT, ZSTD 7 | **19.02** | baseline |
+| Previous ROOT, ZSTD 7 | 19.02 | baseline |
 | ROOT, ZSTD 7, 256 KiB baskets | 18.85 | -0.9% |
-| ROOT, ZSTD 9, 256 KiB baskets | 18.59 | -2.3% |
+| ROOT, ZSTD 9, 256 KiB baskets (adopted) | **18.59** | -2.3% |
 | ROOT, LZMA 7, 256 KiB baskets | **16.69** | **-12.2%** |
 | Parquet, Brotli 6, delta/byte-stream-split encoding | 21.08 | +10.8% |
 | Parquet, GZIP 6, delta/byte-stream-split encoding | 21.34 | +12.2% |
 
-TB is decimal (10^12 bytes); the current 19.02 TB estimate is **17.30 TiB**.
+TB is decimal (10^12 bytes); the old 19.02 TB baseline is **17.30 TiB**.
 The observed within-stratum size-sensitivity envelope is **17.85–19.75 TB**
-for current ROOT. This is not a statistical confidence interval: samples
+for the old baseline. This is not a statistical confidence interval: samples
 were chosen deterministically at run quantiles, and unsampled files may
 differ. Alternative estimates use only one paired file per stratum. These
 figures include projected capacity for the 4,087 files unlisted in the earlier
 archive index; the benchmark does not resolve their availability.
 
-Current conversion projects to **65.45 CPU-days**, or 6.80 CPU-seconds per
-source. Allow roughly **80–100 CPU-days for planning**, pending an actual
+The previous ZSTD-7 conversion projected **65.45 CPU-days**, or 6.80 CPU-seconds per
+source, with an **80–100 CPU-day planning allowance** pending an actual
 batch-worker pilot; transfer, archive hashing, queue delays and failures are
-additional. This measurement uses the current source built with `-O2` on the
+additional. This measurement used the old source built with `-O2` on the
 login node; production uses `-O3 -DNDEBUG` and may run on different hardware.
 
 LZMA saves about **2.33 TB**, but on the 20 matched files its repacking CPU was
 **2.27 times** ZSTD-7/256-KiB and its full-column decoding CPU was **2.05 times**
 as high. ZSTD-9 repacking took 2.11 times as much CPU for only a small size
-gain. These are paired encoding/decoding measurements, not complete LZMA or
-Parquet production-pipeline timings.
+gain. These are paired encoding/decoding measurements, not complete ZSTD-9,
+LZMA or Parquet production-pipeline timings. The old CPU allowance must be
+remeasured for the adopted configuration before production scheduling.
 
-For the requested space/speed balance, keep ROOT/ZSTD unless saving the extra
-2.33 TB is worth the LZMA CPU cost. LZMA changes the codec, not the tree/branch
-layout, but the separate TWin reader migration is still required. No format,
-codec, energy-selection, or analysis-reader default was changed by this test.
+LZMA changes the codec, not the tree/branch layout. No defaults were changed
+by the September 27 benchmark itself. The September 28 implementation adopts
+ZSTD 9, larger baskets, all events and TWin-compatible filenames; the current
+GitHub TWin reader already uses the two retained trees without AdScaledNL.
 The [ROOT codec choices](https://root.cern.ch/manual/io/#compression-and-performance)
 do not by themselves establish analysis compatibility.
 
@@ -72,6 +75,18 @@ are in the [experiment record](estimates/noenergy-2026-09-27/README.md);
 [`summary.json`](estimates/noenergy-2026-09-27/summary.json) contains the
 machine-readable projections. Independent rational-arithmetic size checks,
 CPU reweighting, timing-row checks and negative completeness tests passed.
+
+## Adopted-format compatibility pilot: September 28
+
+The new `dyb-slim-v4` converter processed two adjacent P17B/EH1 files,
+1,509,445 events, into one ZSTD-9/256-KiB chunk: 100,089,201 input bytes to
+40,919,903 output bytes. End-to-end conversion used **37.4112 CPU seconds /
+37.6355 wall seconds** on the IHEP login node, built with `-O3 -DNDEBUG`.
+These two files are a compatibility sample, not the stratified population
+sample; do not multiply this timing into an archive-wide CPU budget. The
+[result](estimates/twin-compatibility.json) also retains 17-digit per-file
+timings and [TWin input/physics checks](TWIN_COMPATIBILITY.md). Production was
+not started and cluster analysis source copies were not changed.
 
 ## Historical original-reconstruction pilot
 
@@ -132,7 +147,7 @@ mismatches were found.
 
 | Resource | Best estimate | Planning value |
 | --- | ---: | ---: |
-| Slim archive, default AD selection on | about 12 TB (11.5–12.0 TB) | **25 TB available** |
+| Slim archive, historical AD selection on | about 12 TB (11.5–12.0 TB) | **25 TB available** |
 | Slim archive, selection off | 19–21 TB decimal | 25 TB available |
 | CPU | 72.0 CPU-days from 7.486 s/source | **80–100 CPU-days** |
 | Array tasks at 16 sources/task | 53,821 | 16 sources/task initially |
@@ -141,9 +156,10 @@ mismatches were found.
 
 Raw NumPy arrays for the retained primitive fields were estimated near 45 TB
 before container/compression overhead, so NumPy is not the space-efficient
-choice without compression. ROOT preserves the retained tree paths, but is
-not drop-in compatible with the unchanged TWin reader: its AdScaledNL
-dependencies and filename-based run-number parsing still need migration.
+choice without compression. At the time of this historical pilot, the old
+TWin reader depended on AdScaledNL and the output filenames lacked its run
+field. The current GitHub reader and new filenames resolve those differences;
+this does not update old cluster copies.
 See the [source audit](estimates/mini-branches-2026-09-27/README.md#residual-flasher-inputs-in-src_fd).
 
 The pilot transfer delivered the 75.9 MB ROOT payload at 56.37 MB/s; an earlier

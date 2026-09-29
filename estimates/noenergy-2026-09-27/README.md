@@ -37,7 +37,7 @@ are represented; NoTag is included wherever present. There are 20 strata.
 One middle-quantile file from each stratum is used for five paired encoding
 tests. This is a deterministic, archive-listed sample, not a random sample.
 
-The baseline is the unchanged `dyb-slim-v3` converter, ROOT compression
+The historical baseline is the `dyb-slim-v3` converter, ROOT compression
 setting 507. Alternatives use the same events and fields:
 
 | Variant | Settings |
@@ -112,12 +112,16 @@ The projection is for **all 831,334 expected files**, including the 4,087
 unlisted in the September 2 archive index. This benchmark does not resolve
 their availability. It also does not establish original-to-mini equivalence
 outside the separately checked six pairs or TWin end-to-end physics results.
-Changing codecs does not fix the TWin reader migration described in the
-[source audit](../mini-branches-2026-09-27/README.md#residual-flasher-inputs-in-src_fd).
+This benchmark predates the compatible output filenames and the separate
+[current-GitHub TWin regression](../../TWIN_COMPATIBILITY.md).
 
 ## Reproduce
 
-From the repository root, first generate the plan locally:
+For an exact rerun of this historical benchmark, use a separate checkout of
+preservation commit `edd775f7a44ae69de7a82ffa72582b6df7299e50`; the frozen plan
+pins the old converter SHA-256. Do not replace its converter with v4 or
+overwrite this recorded result with new-default measurements. From that
+checkout's repository root, the plan can be regenerated locally:
 
 ```bash
 python3 estimates/noenergy-2026-09-27/benchmark.py plan . > estimates/noenergy-2026-09-27/plan.json

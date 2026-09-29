@@ -93,10 +93,11 @@ python3 preserve.py run --remote-code-root $CODE --remote-stage-root $STAGE \
   --period P17B --hall EH1 --limit-runs 1
 ```
 
-The converter still deployed under `/dybfs2` is `dyb-slim-v2`; the selection
-in this repository requires deploying `dyb-slim-v3` to the new code root
-first, together with the updated `preserve.py`. No deployment or production
-start was performed by the September 27 input-default change. The earlier
+The last observed converter under `/dybfs2` was `dyb-slim-v2`; the current
+format requires deploying `dyb-slim-v4` to the new code root first, together
+with the updated `preserve.py`. Confirm `bin/slim-root --version` there before
+starting. The September 28 format change did not deploy production code or
+start production. Its bounded TWin test used disposable `/tmp` files. The earlier
 worker probe did not test compute-node readability of `/lustrefs/juno26/dyw`;
 verify it in the authorized pilot. A one-file local mini conversion passed
 reopening and all retained-value comparisons; see
@@ -145,8 +146,9 @@ python3 preserve.py run \
   --confirm-remote-delete DELETE-VERIFIED-RUN
 ```
 
-Defaults are mini inputs, 16 source files per task, the AD energy selection on
-(`--ad-selection on`; `off` keeps every entry), HepJob group `dyw`, `short`
+Defaults are mini inputs, ROOT ZSTD 9 / 256 KiB baskets, 16 source files per
+task, the AD energy selection off (`--ad-selection off`, every entry kept),
+HepJob group `dyw`, `short`
 walltime, 1,024 MB memory, two submission attempts, and a two-hour per-run
 wait. Override only after measured evidence from the production pilot. Use one
 selection mode for the whole archive: `verify-all` rejects a mixed archive and
@@ -159,6 +161,11 @@ selection mode for the whole archive: `verify-all` rejects a mixed archive and
   reopened, verified, and skipped.
 - A catalog checksum, period, hall, `--files-per-job`, `--input-source`, or `--ad-selection`
   mismatch is refused.
+- New staging uses `preserved.NNNNNNN.slim.CCCCCC.root` filenames for TWin.
+  Legacy staging without this recorded output prefix cannot resume under the
+  new preparation command; use a new empty staging root. Existing completed
+  archives retain their names and remain verifiable. Do not rename files
+  independently of their checksums and run metadata.
 - All 4,009 catalogs are rehashed and checked for exact period, hall, run,
   source-path identity, and duplicate paths before they can be staged.
 - A failed transfer remains under `.RUN_STEM.incoming` and never authorizes

@@ -50,8 +50,10 @@ class PreserveTests(unittest.TestCase):
             self.assertTrue((run_dir / "reports").is_dir())
             self.assertEqual((run_dir / "chunks" / "000001.list").read_text().splitlines(),
                              inputs[2:4])
-            self.assertEqual((run_dir / "ad-selection").read_text(), "on\n")
-            self.assertEqual(marker["selection"], preserve.selection_record("on"))
+            self.assertEqual((run_dir / "ad-selection").read_text(), "off\n")
+            self.assertEqual(marker["selection"], preserve.selection_record("off"))
+            self.assertEqual(marker["output_prefix"], "preserved.0012345")
+            self.assertEqual((run_dir / "output-prefix").read_text(), "preserved.0012345\n")
             self.assertEqual(
                 preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 2,
                                      require_registered=False, input_source="recon")["catalog_sha256"],
@@ -59,7 +61,16 @@ class PreserveTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "does not match"):
                 preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 2,
-                                     require_registered=False, ad_selection="off", input_source="recon")
+                                     require_registered=False, ad_selection="on", input_source="recon")
+            del marker["output_prefix"]
+            (run_dir / preserve.MARKER_NAME).write_text(json.dumps(marker))
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 2,
+                                     require_registered=False, input_source="recon")
+            for run, prefix in ((12345, "preserved.0012346"), (10000000, "preserved.10000000")):
+                with self.assertRaisesRegex(ValueError, "run-number convention"):
+                    preserve.output_prefix({"stem": "run12345", "run_number": run,
+                                            "output_prefix": prefix})
 
     def test_mini_inputs_preserve_catalog_identity_and_fail_on_missing_files(self):
         canonical = ("/dybfs/rec/P21A/rec/runs_0082000/runs_0082300/run_0082379/"
@@ -78,6 +89,7 @@ class PreserveTests(unittest.TestCase):
         args = preserve.build_parser().parse_args([
             "run", "--local-root", "/Volumes/test/data", "--mount-root", "/Volumes/test"])
         self.assertEqual(args.input_source, "mini")
+        self.assertEqual(args.ad_selection, "off")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             catalog = root / "run82379.list"
@@ -202,16 +214,17 @@ class PreserveTests(unittest.TestCase):
             catalog.write_text("\n".join(inputs) + "\n", encoding="utf-8")
             marker = preserve.prepare_run(
                 str(catalog), "P17B", "EH1", str(root / "stage"), str(root / "code"), 2,
-                require_registered=False, input_source="recon",
+                require_registered=False, input_source="recon", ad_selection="on",
             )
             run_dir = Path(marker["run_dir"])
+            prefix = marker["output_prefix"]
             header = "\t".join(preserve.SOURCE_REPORT_COLUMNS) + "\n"
             for chunk_index, paths in enumerate((inputs[:2], inputs[2:])):
                 rows = ["{}\t{}\t10\t20\t100\t0\t101\t0\t1\t0.5\t0.4\t7\t1\t2\t0\t0\t0\t0\t0\t0".format(
                     source_index, path) for source_index, path in enumerate(paths)]
-                (run_dir / "reports" / "run12345.slim.{:06d}.sources.tsv".format(
-                    chunk_index)).write_text(header + "\n".join(rows) + "\n", encoding="utf-8")
-            durations = preserve.aggregate_duration_reports(run_dir, marker, "run12345")
+                (run_dir / "reports" / "{}.slim.{:06d}.sources.tsv".format(
+                    prefix, chunk_index)).write_text(header + "\n".join(rows) + "\n", encoding="utf-8")
+            durations = preserve.aggregate_duration_reports(run_dir, marker, prefix)
             duration = durations["path"]
             self.assertEqual(
                 (durations["rows"], durations["entries"], durations["input_bytes"],
@@ -240,7 +253,7 @@ class PreserveTests(unittest.TestCase):
                 preserve.validate_duration_table(duration, inputs, 2, mode="off")
             (run_dir / "chunks/000000.list").write_text("/wrong/input.root\n")
             with self.assertRaisesRegex(ValueError, "chunk paths do not match"):
-                preserve.aggregate_duration_reports(run_dir, marker, "run12345")
+                preserve.aggregate_duration_reports(run_dir, marker, prefix)
 
     def test_selection_records_and_verify_lines(self):
         self.assertEqual(preserve.selection_mode(preserve.selection_record("off")), "off")

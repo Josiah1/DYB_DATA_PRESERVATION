@@ -23,8 +23,9 @@
 #include <vector>
 
 namespace {
-constexpr int kCompressionSettings = 507;  // ZSTD level 7.
-constexpr const char* kVersion = "dyb-slim-v3";
+constexpr int kCompressionSettings = 509;  // ROOT ZSTD level 9.
+constexpr int kBasketBytes = 256 * 1024;
+constexpr const char* kVersion = "dyb-slim-v4";
 constexpr int kAdCount = 4;              // AD detector codes 1-4.
 constexpr double kAdMinEnergyMeV = 0.7;  // AD entries are kept strictly above this.
 constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.7].
@@ -285,6 +286,12 @@ void convert(const std::string& input_list, const std::string& output_path,
     sources.Branch("adBelow0p3MeV", ad_below, "adBelow0p3MeV[4]/L");
     sources.Branch("adFrom0p3To0p7MeV", ad_band, "adFrom0p3To0p7MeV[4]/L");
 
+    for (TTree* tree : {&ad, &calib, &sources}) {
+      tree->SetAutoFlush(0);
+      tree->SetAutoSave(0);
+      tree->SetBasketSize("*", kBasketBytes);
+    }
+
     for (std::size_t source_index = 0; source_index < inputs.size(); ++source_index) {
       const auto& input_path = inputs[source_index];
       const auto source_wall_start = std::chrono::steady_clock::now();
@@ -423,7 +430,7 @@ int main(int argc, char** argv) {
       verify_file(argv[2]);
       return 0;
     }
-    std::string input_list, output, source_report, selection = "on";
+    std::string input_list, output, source_report, selection = "off";
     int run_number = -1;
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];

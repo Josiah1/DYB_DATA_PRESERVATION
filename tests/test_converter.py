@@ -21,7 +21,9 @@ AD_MIN, BAND_LOW = 0.7, 0.3
 MACRO = r'''
 #include <TDirectory.h>
 #include <TFile.h>
+#include <TLeaf.h>
 #include <TTree.h>
+#include <cassert>
 #include <fstream>
 #include <string>
 void make_source(const char* table, const char* output) {
@@ -62,6 +64,25 @@ void make_source(const char* table, const char* output) {
   rec->cd(); simple.Write();
   data->cd(); stats.Write();
   file.Close();
+}
+void check_format(const char* path) {
+  TFile file(path);
+  assert(!file.IsZombie() && file.GetCompressionSettings() == 509);
+  for (const char* name : {"Event/Rec/AdSimpleNL", "Event/Data/CalibStats"}) {
+    auto* tree = file.Get<TTree>(name);
+    assert(tree && tree->GetAutoFlush() == 0 && tree->GetAutoSave() == 0);
+    for (auto* object : *tree->GetListOfBranches()) {
+      auto* branch = static_cast<TBranch*>(object);
+      assert(branch->GetBasketSize() == 262144);
+      assert(branch->GetCompressionSettings() == 509);
+      assert(branch->GetEntryOffsetLen() == 0);
+      assert(branch->GetBasketEntry()[0] == 0);
+      assert(branch->GetBasketEntry()[branch->GetWriteBasket()] == tree->GetEntries());
+    }
+  }
+  auto* sources = file.Get<TTree>("Preservation/Sources");
+  for (const char* name : {"dataDurationSeconds", "processingWallSeconds", "processingCpuSeconds"})
+    assert(std::string(sources->GetLeaf(name)->GetTypeName()) == "Double_t");
 }
 '''
 
@@ -154,7 +175,8 @@ class ConverterTests(unittest.TestCase):
         report = self.root / "{}.tsv".format(tag)
         result = subprocess.run(
             [str(CONVERTER), "--input-list", str(listing), "--output", str(output),
-             "--source-report", str(report), "--run-number", "7777", "--ad-selection", mode],
+             "--source-report", str(report), "--run-number", "7777"] +
+            (["--ad-selection", mode] if mode == "on" else []),
             check=True, stdout=subprocess.PIPE, universal_newlines=True)
         return output, report, parse_result_line(result.stdout)
 
@@ -180,6 +202,10 @@ class ConverterTests(unittest.TestCase):
         self.assertTrue(any(e["counts"][0] for e in self.expected), "below band must be populated")
         for mode in ("on", "off"):
             output, report, metrics = self.convert(mode, "chunk-" + mode)
+            subprocess.run([find_root(), "-l", "-b", "-q", "-e",
+                            '#include "{}"'.format(self.root / "make_source.C"),
+                            "-e", 'check_format("{}");'.format(output)], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             kept = self.check_report(report, mode)
             self.assertEqual(metrics["selection"], mode)
             self.assertEqual(int(metrics["kept_entries"]), kept)
@@ -220,12 +246,12 @@ class ConverterTests(unittest.TestCase):
             self.assertIn("SKIP output=", report)
             self.assertFalse(list((run_dir / "status").glob("*.fail")))
         result = preserve.finalize_run(run_dir, stage)
-        expected_kept = sum(e["kept"] for e in self.expected)
+        expected_kept = sum(e["entries"] for e in self.expected)
         self.assertEqual((result["source_kept_entries"], result["source_entries"]),
                          (expected_kept, sum(e["entries"] for e in self.expected)))
         verified = preserve.verify_local_run(run_dir, root_verifier=CONVERTER)
         self.assertEqual((verified["kept_entries"], verified["ad_selection"], verified["outputs"]),
-                         (expected_kept, "on", 2))
+                         (expected_kept, "off", 2))
 
         (stage / "catalog-inventory.json").write_text(preserve.json.dumps({
             "kind": "dyb-preserve-catalog-inventory",
@@ -238,7 +264,7 @@ class ConverterTests(unittest.TestCase):
         }))
         everything = preserve.verify_all(stage, root_verifier=CONVERTER)
         self.assertEqual((everything["runs"], everything["kept_entries"], everything["ad_selection"]),
-                         (1, expected_kept, "on"))
+                         (1, expected_kept, "off"))
 
         run_json = run_dir / "run.json"
         original = run_json.read_text()
@@ -248,11 +274,12 @@ class ConverterTests(unittest.TestCase):
             preserve.verify_local_run(run_dir)
         run_json.write_text(original)
         first_chunk = subprocess.run(
-            [str(CONVERTER), "--verify", str(run_dir / "outputs" / "run7777.slim.000000.root")],
+            [str(CONVERTER), "--verify", str(run_dir / "outputs" /
+             (marker["output_prefix"] + ".slim.000000.root"))],
             check=True, stdout=subprocess.PIPE, universal_newlines=True).stdout
         with self.assertRaisesRegex(ValueError, "does not match its timing rows"):
-            preserve.check_verified_chunk(first_chunk, (self.expected[1]["kept"],
-                                                        self.expected[1]["entries"], 1), "on")
+            preserve.check_verified_chunk(first_chunk, (self.expected[1]["entries"],
+                                                        self.expected[1]["entries"], 1), "off")
         preserve.cleanup_run(run_dir, stage, marker["catalog_sha256"])
         self.assertFalse(run_dir.exists())
 

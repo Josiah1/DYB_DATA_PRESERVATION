@@ -165,6 +165,17 @@ def parse_run_number(stem):
     return int(match.group(1))
 
 
+def output_prefix(record):
+    # Older schema-3 archives used the catalog stem; keep them verifiable.
+    prefix = validate_token(record.get("output_prefix", record["stem"]), "output prefix")
+    if "output_prefix" in record:
+        run = record.get("run_number")
+        if (not isinstance(run, int) or not 0 <= run <= 9999999 or
+                prefix != "preserved.{:07d}".format(run)):
+            raise ValueError("output prefix does not match the TWin run-number convention")
+    return prefix
+
+
 def parse_catalog_inputs(catalog_data, catalog):
     inputs = []
     seen = set()
@@ -342,7 +353,7 @@ def inventory_records():
 
 
 def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
-                require_registered=True, ad_selection="on", input_source=DEFAULT_INPUT_SOURCE):
+                require_registered=True, ad_selection="off", input_source=DEFAULT_INPUT_SOURCE):
     selection = selection_record(ad_selection)
     catalog = os.path.normpath(catalog)
     if require_registered and not registered_catalog(period, hall, catalog):
@@ -353,6 +364,8 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
         raise ValueError("IHEP compute nodes cannot write to {}".format(stage_root))
     stem = validate_token(Path(catalog).stem, "catalog stem")
     run_number = parse_run_number(stem)
+    prefix = output_prefix({"stem": stem, "run_number": run_number,
+                            "output_prefix": "preserved.{:07d}".format(run_number)})
     catalog_data, catalog_source, catalog_backup = read_catalog_data(period, hall, catalog)
     catalog_sha = hashlib.sha256(catalog_data).hexdigest()
     inputs = resolve_inputs(parse_catalog_inputs(catalog_data, catalog), input_source)
@@ -360,10 +373,10 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
     run_dir = (Path(stage_root) / period / hall / stem).resolve()
     if run_dir.exists():
         marker = load_json(run_dir / MARKER_NAME)
-        expected = (catalog_sha, files_per_job, period, hall, selection, input_source)
+        expected = (catalog_sha, files_per_job, period, hall, selection, input_source, prefix)
         actual = (marker.get("catalog_sha256"), marker.get("files_per_job"),
                   marker.get("period"), marker.get("hall"), marker.get("selection"),
-                  input_source_mode(marker))
+                  input_source_mode(marker), marker.get("output_prefix"))
         if actual != expected:
             raise ValueError("existing run staging does not match requested catalog")
         return marker
@@ -379,7 +392,7 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
         for index, paths in enumerate(chunks):
             atomic_text(temporary / "chunks" / "{:06d}.list".format(index),
                         "\n".join(paths) + "\n")
-        atomic_text(temporary / "output-prefix", stem + "\n")
+        atomic_text(temporary / "output-prefix", prefix + "\n")
         atomic_text(temporary / "run-number", str(run_number) + "\n")
         atomic_text(temporary / "ad-selection", ad_selection + "\n")
 
@@ -402,6 +415,7 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
             "hall": hall,
             "stem": stem,
             "run_number": run_number,
+            "output_prefix": prefix,
             "catalog": catalog,
             "catalog_source": catalog_source,
             "catalog_sha256": catalog_sha,
@@ -661,6 +675,8 @@ def finalize_run(run_dir, stage_root):
     if status["state"] != "COMPLETE":
         raise ValueError("run is not complete: {}".format(status))
     prefix = (run_dir / "output-prefix").read_text(encoding="utf-8").strip()
+    if prefix != output_prefix(marker):
+        raise ValueError("staged output prefix does not match run metadata")
     outputs = [run_dir / "outputs" / "{}.slim.{:06d}.root".format(prefix, index)
                for index in range(marker["chunk_count"])]
     missing = [str(path) for path in outputs if not path.is_file()]
@@ -786,6 +802,7 @@ def verify_local_run(directory, root_verifier=None):
     if result.get("duration_file") != "durations.tsv" or result.get("checksums") != "SHA256SUMS":
         raise ValueError("run.json names unexpected integrity artifacts")
     validate_token(result.get("stem"), "run stem")
+    prefix = output_prefix(result)
     if result.get("chunk_count", 0) <= 0 or result.get("files_per_job", 0) <= 0:
         raise ValueError("run.json has invalid chunk sizing")
     catalog = directory / "catalog.list"
@@ -809,7 +826,7 @@ def verify_local_run(directory, root_verifier=None):
         raise ValueError("duration chunk count does not match run.json")
 
     expected_outputs = {
-        "outputs/{}.slim.{:06d}.root".format(result["stem"], index)
+        "outputs/{}.slim.{:06d}.root".format(prefix, index)
         for index in range(result["chunk_count"])
     }
     actual_outputs = {
@@ -851,7 +868,7 @@ def verify_local_run(directory, root_verifier=None):
         if not verifier.is_file() or not os.access(str(verifier), os.X_OK):
             raise ValueError("ROOT verifier is not executable: {}".format(verifier))
         for index, expected in enumerate(durations["chunk_totals"]):
-            relative = "outputs/{}.slim.{:06d}.root".format(result["stem"], index)
+            relative = "outputs/{}.slim.{:06d}.root".format(prefix, index)
             output = run_command([str(verifier), "--verify", str(directory / relative)])
             check_verified_chunk(output.stdout, expected, mode)
     return {
@@ -1183,9 +1200,9 @@ def build_parser():
     run.add_argument("--files-per-job", type=int, default=16)
     run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,
                      help="mini (default): IHEP All-mini files; recon: original fixed-catalog paths")
-    run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="on",
+    run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off",
                      help="on: keep AD entries above 0.7 MeV plus every other detector; "
-                          "off: keep every entry (band counts are still recorded)")
+                          "off (default): keep every entry (band counts are still recorded)")
     run.add_argument("--group", default="dyw")
     run.add_argument("--walltime", default="short")
     run.add_argument("--memory-mb", type=int, default=1024)
@@ -1227,7 +1244,7 @@ def build_parser():
     prepare.add_argument("--stage-root", required=True)
     prepare.add_argument("--code-root", required=True)
     prepare.add_argument("--files-per-job", type=int, required=True)
-    prepare.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="on")
+    prepare.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off")
     prepare.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE)
     prepare.set_defaults(function=lambda args: print(json.dumps(prepare_run(
         args.catalog, args.period, args.hall, args.stage_root, args.code_root,

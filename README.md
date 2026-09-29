@@ -13,9 +13,12 @@ and duration comparisons; a batch-worker pilot is still needed. An explicit
 later order and the mounted destination disk are required for production.
 See [OPERATIONS.md](OPERATIONS.md) for
 the runbook and [BENCHMARK.md](BENCHMARK.md) for measured resource estimates.
-The live TWin source audit also found an unresolved raw-versus-corrected
-energy-selection difference; see [AD energy selection](#ad-energy-selection)
-before using selection-on output for that analysis.
+The default now retains every event, leaving corrected-energy selection to
+TWin. See [TWin compatibility](TWIN_COMPATIBILITY.md) for the pinned GitHub
+reader, filename contract, and bounded end-to-end regression.
+The new two-file test passed on 1,509,445 readouts; four physics modes match
+with a fixed test initialization clock (TWin's existing startup-clock
+dependence is documented separately from preservation compatibility).
 
 ## Fixed inputs
 
@@ -68,9 +71,11 @@ mini productions, which may have different branch content.
 
 ## Output format
 
-ROOT with ZSTD level 7 remains the production default. The lossless codec
-comparison in [BENCHMARK.md](BENCHMARK.md) measured a smaller LZMA alternative,
-with higher encoding/decoding CPU cost; it has not been adopted as a default.
+ROOT with **ZSTD level 9 and 256 KiB branch baskets** is the default
+(`dyb-slim-v4`). Automatic basket-size adaptation and autosave are disabled;
+event baskets are flushed at each source boundary for bounded memory and
+per-source timing. The lossless codec comparison in [BENCHMARK.md](BENCHMARK.md)
+measured a smaller, slower LZMA alternative; it has not been adopted.
 Each chunk contains at most 16 source files and these trees:
 
 - `/Event/Rec/AdSimpleNL`: `site`, `detector`, `triggerType`,
@@ -86,9 +91,15 @@ Each chunk contains at most 16 source files and these trees:
 - `/Preservation/selection`: a `TNamed` whose title states the selection rule
   the chunk was written with; the verifier refuses any other text.
 
+Chunk names are `preserved.0048734.slim.000000.root`, with a seven-digit
+run field for TWin and a zero-based, six-digit chunk index. Tree paths, scalar
+types and source event order are preserved; no precision reduction is used.
+`run.json` records `output_prefix`; older archives without it still verify
+using their original catalog-stem filenames.
+
 ### AD energy selection
 
-The selection is on by default and switched with `--ad-selection on|off` on
+The selection is **off by default** and switched with `--ad-selection on|off` on
 the `run` command (the converter takes the same flag). With it on, an entry
 from an antineutrino detector (`detector` 1-4) is written only when
 `energy > 0.7 MeV`; every entry from any other detector (water pools, RPC) is
@@ -102,9 +113,9 @@ selection off every entry is written, `keptEntries = entries`, and the two AD
 count arrays are still filled. The mode is recorded in the run marker,
 `run.json`, and every chunk; one archive must use one mode.
 
-**Pre-production caveat:** this selection uses uncorrected
-`AdSimpleNL.energy`. The live `src_FD/Retw.C` applies `CorrEnergy` before
-`BuildEvent.C` tests the 0.7 MeV threshold. Equivalence has not been
+**Opt-in selection caveat:** this selection uses uncorrected
+`AdSimpleNL.energy`. TWin applies an energy correction before
+`BuildEvent.C` tests the threshold (0.7 MeV normally, 0.3 MeV with `--acpo`). Equivalence has not been
 validated, and corrections above unity can promote otherwise dropped
 events. Their individual inputs cannot be recovered from aggregate counts.
 `--ad-selection off` avoids this loss by retaining every entry; selection-on
@@ -187,38 +198,41 @@ make converter
 python3 preserve.py verify-all /mounted/archive --root-verifier ./bin/slim-root
 ```
 
-The archive-wide full checksum pass reads roughly 12 TB (20 TB with the
-selection off) and is therefore
+The archive-wide full checksum pass reads roughly 19 TB with the default
+selection off and is therefore
 expected to take hours to days depending on the local disk. It is deliberately
 separate from the mandatory per-run verification already performed before each
 remote deletion.
 
-## Analysis migration
+## Analysis compatibility
 
-Existing analysis code should stop constructing the `AdScaledNL` chain and
-bind the six event-identification fields from `AdSimpleNL`. The remaining
-`AdSimpleNL` and `CalibStats` paths and branch names are unchanged. With the
-default selection, AD entries at or below 0.7 MeV are absent from the event
-trees; their per-file, per-AD counts in the 0.3-0.7 MeV band and below 0.3 MeV
-are in `/Preservation/Sources` and `durations.tsv`.
+The GitHub `Josiah1/DayaBay-TWin` reader at `d6b1b5e` already reads
+`AdSimpleNL` and `CalibStats` without `AdScaledNL`. New output filenames
+meet its run-number parser, and all events are retained by default.
+Feed one run's chunks, in ascending chunk-index order, to one Retw invocation;
+running Retw independently on each chunk would lose cross-chunk coincidences.
+See [TWIN_COMPATIBILITY.md](TWIN_COMPATIBILITY.md) for usage and regression
+evidence. Older cluster copies and the separate background readers must be
+checked or migrated independently; this does not update them in place.
 
 ## Current estimate
 
 Plan for **25 TB of usable destination space** for one archive copy.
-The 2026-09-27 IHEP-mini test, with **no energy selection**, projects **19.02
-TB** using the current ROOT/ZSTD converter, or **16.69 TB** with the tested
-ROOT/LZMA alternative (12.2% smaller, about 2.3 times the paired repacking CPU).
-The current converter projects to **65.45 CPU-days**; retain 80–100 CPU-days
-as a planning allowance pending a batch-worker pilot. These are sample-based
-projections, not completed-campaign measurements. See
+The 2026-09-27 IHEP-mini test, with **no energy selection**, projects **18.59
+TB** for the adopted ROOT/ZSTD-9/256-KiB setting, or **16.69 TB** with the tested
+ROOT/LZMA alternative. The old ZSTD-7 baseline projected **65.45 CPU-days**;
+that is not an end-to-end timing estimate for the new setting. ZSTD-9 repacking
+took 2.11 times the paired ZSTD-7 repacking CPU. A batch-worker pilot is still
+needed to set the new CPU budget. These are sample-based projections, not
+completed-campaign measurements. See
 [BENCHMARK.md](BENCHMARK.md#current-all-event-estimate-ihep-minis-2026-09-27)
 for weighting, sensitivity and timing boundaries.
 
 The historical selection-on estimate remains about 11.5–12.0 TB, based on
 the September 3 study (44 readable counting samples; 12 actually converted
 period/hall representatives). That raw-energy-selected output is not yet
-validated for TWin's corrected-energy selection. Current defaults remain
-unchanged: explicitly use `--ad-selection off` to retain every input event.
+validated for TWin's corrected-energy selection. The current default
+`--ad-selection off` retains every input event.
 Original-to-mini event equivalence has been checked for six file pairs, not
 for the whole archive.
 The 4,009 fixed catalogs contain exactly 831,334 source files and
