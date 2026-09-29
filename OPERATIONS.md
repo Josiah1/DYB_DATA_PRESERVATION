@@ -7,9 +7,9 @@ data.
 
 ## Single-disk campaign, 2026-09-29
 
-Status: the 0.6-MeV one-run pilot is running. At the user's request, cuts
-0.55–0.59 MeV will be tested before choosing the final cut and starting the
-full campaign. Verified changes must be committed and pushed first.
+The threshold grid uses **0.1-MeV steps**. The completed 0.3–0.7-MeV
+sweep selects 0.6 MeV.
+Verified changes must be committed and pushed before starting the full campaign.
 
 The user authorized threshold testing and production onto the mounted empty
 portable disk. The chosen raw AD cut is **energy > 0.6 MeV**, with all WP/RPC
@@ -24,6 +24,13 @@ budget that reserves 10% of the disk's 14.00 TB free space.
 - Local checks: `make test`; on IHEP all 12 tests passed, including both ROOT tests.
 - Catalog inventory: 4,009 catalogs, 831,334 source files, no catalog failures.
 
+The one-run pilot **P17B/EH1/run21221** (HepJob **81751470**) passed: 217 mini
+inputs, 14 ROOT chunks, 164,525,202 source entries, 131,036,010 kept entries,
+and 2,683,398,113 bytes including the duration table. All 15 artifact SHA-256
+hashes passed on the destination disk before the generated remote staging
+was removed. This verified run remains in the archive and is skipped on resume.
+See [pilot.json](estimates/energy-threshold-2026-09-29/pilot.json).
+
 `scripts/run_campaign.sh` locates this UUID, explicitly enables the selected
 cut, and supplies the already-authorized execution and verified-staging
 cleanup flags. Every transfer checks the UUID before and after copying; all
@@ -37,9 +44,20 @@ bash scripts/run_campaign.sh --limit-runs 1
 bash scripts/run_campaign.sh
 ```
 
-The full campaign will use a local `dyb-preservation.service` user unit.
+Start the full campaign in a local `dyb-preservation.service` user unit:
+
+```bash
+systemd-run --user --unit=dyb-preservation \
+  --description='Daya Bay preservation to portable disk' \
+  --property="WorkingDirectory=$PWD" \
+  --property="StandardOutput=append:$PWD/build/campaign.log" \
+  --property="StandardError=append:$PWD/build/campaign.log" \
+  /usr/bin/systemd-inhibit --what=sleep --mode=block \
+  --why='Daya Bay data preservation' /usr/bin/bash "$PWD/scripts/run_campaign.sh"
+```
+
 Read progress with `systemctl --user status dyb-preservation.service`
-and `tail -n 30 build/campaign.log`. Launch it with a sleep inhibitor.
+and `tail -n 30 build/campaign.log`. The command inhibits sleep while running.
 After a failure, inspect the log and fix its cause before restarting. An
 unmounted/replaced disk, unreadable input, failed chunk, or checksum mismatch
 stops the controller. This sample-based capacity estimate does not establish

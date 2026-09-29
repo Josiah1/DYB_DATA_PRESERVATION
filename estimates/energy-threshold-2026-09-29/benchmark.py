@@ -16,19 +16,16 @@ sys.path.insert(0, str(REPO / "estimates/noenergy-2026-09-27"))
 from benchmark import command, emit, root_arrays, signatures, timed
 
 CUTS = ("off", "0.3", "0.4", "0.5", "0.6", "0.7")
-REFINED_CUTS = ("0.55", "0.56", "0.57", "0.58", "0.59")
 PLAN = REPO / "estimates/noenergy-2026-09-27/plan.json"
 
 
-def build(work, cuts=CUTS):
+def build(work):
     work.mkdir(parents=True, exist_ok=True)
     source = (REPO / "src/slim_root.cpp").read_text()
     current = re.search(r"constexpr double kAdMinEnergyMeV = ([0-9.]+);", source).group(1)
     flags = shlex.split(command(["root-config", "--cflags", "--libs"]))
     builds = {}
-    for cut in cuts:
-        if cut == "off":
-            continue
+    for cut in CUTS[1:]:
         # Disposable, explicitly labelled benchmark binaries; never deployed.
         text = source.replace(current, cut).replace(current.replace(".", "p"), cut.replace(".", "p"))
         cpp = work / ("cut-" + cut + ".cpp")
@@ -41,7 +38,7 @@ def build(work, cuts=CUTS):
     emit("build", **json.loads((work / "build.json").read_text()))
 
 
-def run(work, index, cuts=CUTS):
+def run(work, index):
     import numpy as np
     import ROOT
     ROOT.PyConfig.DisableRootLogon = True
@@ -62,7 +59,7 @@ def run(work, index, cuts=CUTS):
         tmp = Path(temporary)
         listing = tmp / "input.list"
         listing.write_text(str(source) + "\n")
-        for cut in cuts:
+        for cut in CUTS:
             upper = 0.7 if cut == "off" else float(cut)
             mask = np.ones(entries, dtype=bool) if cut == "off" else (~ad | (energy > upper))
             output, report = tmp / "output.root", tmp / "source.tsv"
@@ -90,13 +87,12 @@ def run(work, index, cuts=CUTS):
             report.unlink()
     after = source.stat()
     assert (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns)
-    emit("complete", index=index, variants=len(cuts), passed=True)
+    emit("complete", index=index, variants=len(CUTS), passed=True)
 
 
 def project(groups, measurements):
     result = {}
-    cuts = sorted({r["cut"] for r in measurements}, key=lambda c: -1 if c == "off" else float(c))
-    for cut in cuts:
+    for cut in CUTS:
         selected = {g: [r for r in measurements if r["cut"] == cut and r["group"] == g] for g in groups}
         assert all(selected.values()), "missing threshold/stratum"
         result[cut] = dict(
@@ -110,11 +106,11 @@ def project(groups, measurements):
 
 def choose(projections, available):
     # Fixed 10% space reserve; observed within-stratum maxima must also fit.
-    ordered = sorted(projections, key=lambda c: -1 if c == "off" else float(c))
-    return next((cut for cut in ordered if projections[cut]["high_bytes"] <= available * 0.90), None)
+    return next((cut for cut in CUTS if projections[cut]["high_bytes"] <= available * 0.90), None)
 
 
-def read_results(results, plan, cuts):
+def summarize(results, available):
+    plan = json.loads(PLAN.read_text())
     measurements = []
     hashes = set()
     for index, sample in enumerate(plan["samples"]):
@@ -122,30 +118,16 @@ def read_results(results, plan, cuts):
         assert rows[0]["kind"] == "start" and rows[0]["index"] == index
         assert all(rows[0][key] == value for key, value in sample.items())
         hashes.add(rows[0]["source_sha256"])
-        assert rows[-1] == dict(kind="complete", index=index, variants=len(cuts), passed=True)
+        assert rows[-1] == dict(kind="complete", index=index, variants=len(CUTS), passed=True)
         data = rows[1:-1]
-        assert len(data) == len(cuts) and {r["cut"] for r in data} == set(cuts)
+        assert len(data) == len(CUTS) and {r["cut"] for r in data} == set(CUTS)
         assert all(r["passed"] and r["index"] == index and r["group"] == sample["group"] for r in data)
         assert len({r["entries"] for r in data}) == len({r["non_ad"] for r in data}) == 1
         measurements.extend(data)
     assert len(hashes) == 1
-    return measurements, hashes.pop()
-
-
-def summarize(results, available, refinement=None):
-    plan = json.loads(PLAN.read_text())
-    measurements, digest = read_results(results, plan, CUTS)
-    hashes = [digest]
-    if refinement:
-        extra, digest = read_results(refinement, plan, REFINED_CUTS)
-        measurements.extend(extra)
-        hashes.append(digest)
-        for index in range(len(plan["samples"])):
-            rows = [r for r in measurements if r["index"] == index]
-            assert len({r["entries"] for r in rows}) == len({r["non_ad"] for r in rows}) == 1
     projections = project(plan["groups"], measurements)
     emit("estimate", files=plan["expected_files"], samples=len(plan["samples"]),
-         source_sha256=hashes, available_bytes=available, budget_bytes=available * 0.9,
+         source_sha256=hashes.pop(), available_bytes=available, budget_bytes=available * 0.9,
          selected_cut=choose(projections, available), projections=projections,
          caveat="Deterministic sample; extrema are a sensitivity envelope, not a confidence interval. Raw AD energy selection; no TWin corrected-energy equivalence claim.")
 
@@ -173,15 +155,12 @@ if __name__ == "__main__":
     parser.add_argument("path", type=Path, nargs="?")
     parser.add_argument("--index", type=int)
     parser.add_argument("--available", type=int)
-    parser.add_argument("--refine", action="store_true")
-    parser.add_argument("--refinement", type=Path)
     args = parser.parse_args()
-    cuts = REFINED_CUTS if args.refine else CUTS
     if args.mode == "build":
-        build(args.path, cuts)
+        build(args.path)
     elif args.mode == "run":
-        run(args.path, args.index, cuts)
+        run(args.path, args.index)
     elif args.mode == "summarize":
-        summarize(args.path, args.available, args.refinement)
+        summarize(args.path, args.available)
     else:
         check()

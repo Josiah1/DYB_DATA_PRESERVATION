@@ -1,0 +1,52 @@
+{
+  "cluster_id": 81751470,
+  "completed_at": "2026-09-29T10:18:27+00:00",
+  "converter_source_sha256": "a829b7adcb25b51afe9b3698f51d5bceeb1d59fb7e2f83fca1c682f5b4579230",
+  "converter_version": "dyb-slim-v5",
+  "created_at": "2026-09-29T10:11:03+00:00",
+  "disk_uuid": "2A4F48F8BDFEE355",
+  "local_verification": {
+    "ad_selection": "on",
+    "bytes": 2683398113,
+    "catalog_sha256": "0da55b5774484a0ca765727f6edbaea0e834b85e55d410002102e33477357ef5",
+    "directory": "/media/josiah/LAYJ\u8424\u63771/DYB_DATA_PRESERVATION/data/P17B/EH1/run21221",
+    "duration_rows": 217,
+    "files": 15,
+    "input_source": "mini",
+    "kept_entries": 131036010,
+    "outputs": 14,
+    "schema_version": 4,
+    "source_entries": 164525202
+  },
+  "metrics": {
+    "cpu_seconds": 4201.967,
+    "entries": 164525202.0,
+    "input_bytes": 10871706841.0,
+    "kept_entries": 131036010.0,
+    "output_bytes": 2683333822.0,
+    "sources": 217.0,
+    "wall_seconds": 4358.386
+  },
+  "remote_staging_removed": true,
+  "root_integration_tests": {
+    "failures": 0,
+    "skipped": 0,
+    "tests": 12
+  },
+  "selection": {
+    "ad_detectors": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "ad_min_energy_mev": 0.6,
+    "counted_band_mev": [
+      0.3,
+      0.6
+    ],
+    "keep_non_ad": true,
+    "mode": "on"
+  },
+  "verified_at": "2026-09-29T10:24:21.783016+00:00"
+}

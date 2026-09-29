@@ -1,6 +1,6 @@
 # Single-disk energy-threshold benchmark, 2026-09-29
 
-The lowest cut in the initial 0.1-MeV grid that fits with the chosen reserve is **raw AD energy
+The lowest cut in the requested 0.1-MeV grid that fits with the chosen reserve is **raw AD energy
 strictly greater than 0.6 MeV**, keeping every non-AD trigger. The projected
 archive is **11.838 TB**; the sample sensitivity envelope reaches **12.352 TB**.
 The destination's free space was **13.999655 TB**, giving a 90% budget of
@@ -61,6 +61,13 @@ their run without silently excluding it.
 
 ## Recheck
 
+The full-run pilot subsequently passed on **P17B/EH1/run21221**, cluster
+**81751470**: 217 inputs, 14 ROOT chunks, 164,525,202 input entries and
+131,036,010 retained entries. Its 2,683,398,113 artifact bytes (ROOT chunks
+plus durations) were copied to the selected disk and all 15 SHA-256 hashes
+verified before remote staging cleanup. [pilot.json](pilot.json) records the
+measurement. The converter and ROOT integration tests passed on IHEP (12/12).
+
 The 48 named JSONL result files and `summary.json` are the retained evidence.
 The local projection requires only the standard library:
 
@@ -78,8 +85,4 @@ with `run.sh INDEX`, indices 0–47. For exact historical reproduction, supply
 payload; the current source has the same event selection but a new version.
 The summarizer rejects incomplete, mixed-source, or failed measurements.
 
-The requested finer test uses `run.sh build-refine` followed by 48 tasks
-`run.sh INDEX refine`, testing 0.55, 0.56, 0.57, 0.58 and 0.59 MeV. Save those
-results separately under `refinement/`, then add `--refinement
-estimates/energy-threshold-2026-09-29/refinement` to the summarize command.
-The final campaign remains pending this refinement and the requested Git push.
+The threshold grid uses the requested 0.1-MeV steps.
