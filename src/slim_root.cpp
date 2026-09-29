@@ -25,22 +25,22 @@
 namespace {
 constexpr int kCompressionSettings = 509;  // ROOT ZSTD level 9.
 constexpr int kBasketBytes = 256 * 1024;
-constexpr const char* kVersion = "dyb-slim-v4";
+constexpr const char* kVersion = "dyb-slim-v5";
 constexpr int kAdCount = 4;              // AD detector codes 1-4.
-constexpr double kAdMinEnergyMeV = 0.7;  // AD entries are kept strictly above this.
-constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.7].
+constexpr double kAdMinEnergyMeV = 0.6;  // Lowest tested cut that fits the disk with reserve.
+constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.6].
 constexpr const char* kSelectionOn =
-    "AD entries (detector 1-4) kept when energy > 0.7 MeV; dropped AD entries counted per source "
-    "and detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.7 MeV "
-    "(adFrom0p3To0p7MeV); every other detector kept; timestamps cover every source trigger";
+    "AD entries (detector 1-4) kept when energy > 0.6 MeV; dropped AD entries counted per source "
+    "and detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.6 MeV "
+    "(adFrom0p3To0p6MeV); every other detector kept; timestamps cover every source trigger";
 constexpr const char* kSelectionOff =
     "no selection: every entry kept; AD entries (detector 1-4) still counted per source and "
-    "detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.7 MeV "
-    "(adFrom0p3To0p7MeV); timestamps cover every source trigger";
+    "detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.6 MeV "
+    "(adFrom0p3To0p6MeV); timestamps cover every source trigger";
 
 bool is_ad(Short_t detector) { return detector >= 1 && detector <= kAdCount; }
 
-// 0 = kept, 1 = at or below 0.3 MeV or NaN, 2 = in (0.3, 0.7] MeV.
+// 0 = kept, 1 = at or below 0.3 MeV or NaN, 2 = in (0.3, 0.6] MeV.
 int ad_class(Float_t energy) {
   if (energy > kAdMinEnergyMeV) return 0;
   if (energy > kAdBandLowMeV) return 2;
@@ -60,7 +60,7 @@ const std::vector<std::string> kSourceBranches = {
     "path", "firstEntry", "entries", "keptEntries", "inputBytes", "firstTriggerTimeSec",
     "firstTriggerTimeNanoSec", "lastTriggerTimeSec", "lastTriggerTimeNanoSec",
     "dataDurationSeconds", "processingWallSeconds", "processingCpuSeconds",
-    "adBelow0p3MeV", "adFrom0p3To0p7MeV",
+    "adBelow0p3MeV", "adFrom0p3To0p6MeV",
 };
 
 long long file_size(const std::string& path) {
@@ -133,7 +133,7 @@ long long verify_file(const std::string& path) {
   sources->SetBranchAddress("entries", &source_entries);
   sources->SetBranchAddress("keptEntries", &kept_entries);
   sources->SetBranchAddress("adBelow0p3MeV", ad_below);
-  sources->SetBranchAddress("adFrom0p3To0p7MeV", ad_band);
+  sources->SetBranchAddress("adFrom0p3To0p6MeV", ad_band);
   sources->SetBranchAddress("inputBytes", &source_bytes);
   sources->SetBranchAddress("firstTriggerTimeSec", &first_sec);
   sources->SetBranchAddress("firstTriggerTimeNanoSec", &first_nano);
@@ -220,7 +220,7 @@ void convert(const std::string& input_list, const std::string& output_path,
                      "dataDurationSeconds\tprocessingWallSeconds\tprocessingCpuSeconds\t"
                      "keptEntries";
     for (int ad_index = 1; ad_index <= kAdCount; ++ad_index)
-      source_report << "\tad" << ad_index << "Below0p3MeV\tad" << ad_index << "From0p3To0p7MeV";
+      source_report << "\tad" << ad_index << "Below0p3MeV\tad" << ad_index << "From0p3To0p6MeV";
     source_report << '\n';
     source_report << std::setprecision(std::numeric_limits<double>::max_digits10);
     auto* event_dir = output_file.mkdir("Event");
@@ -284,7 +284,7 @@ void convert(const std::string& input_list, const std::string& output_path,
     sources.Branch("processingWallSeconds", &processing_wall_seconds, "processingWallSeconds/D");
     sources.Branch("processingCpuSeconds", &processing_cpu_seconds, "processingCpuSeconds/D");
     sources.Branch("adBelow0p3MeV", ad_below, "adBelow0p3MeV[4]/L");
-    sources.Branch("adFrom0p3To0p7MeV", ad_band, "adFrom0p3To0p7MeV[4]/L");
+    sources.Branch("adFrom0p3To0p6MeV", ad_band, "adFrom0p3To0p6MeV[4]/L");
 
     for (TTree* tree : {&ad, &calib, &sources}) {
       tree->SetAutoFlush(0);

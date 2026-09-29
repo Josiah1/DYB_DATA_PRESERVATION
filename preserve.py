@@ -19,14 +19,14 @@ import tempfile
 import time
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 AD_SELECTION_MODES = ("on", "off")
 INPUT_SOURCES = ("mini", "recon")
 DEFAULT_INPUT_SOURCE = "mini"
 MINI_ROOT = "/lustrefs/juno26/dyw/rec/All-mini"
 AD_COUNT_COLUMNS = tuple(
     "ad{}{}".format(detector, kind)
-    for detector in (1, 2, 3, 4) for kind in ("Below0p3MeV", "From0p3To0p7MeV"))
+    for detector in (1, 2, 3, 4) for kind in ("Below0p3MeV", "From0p3To0p6MeV"))
 MARKER_NAME = ".dyb-preserve-run.json"
 START_CONFIRMATION = "START-DYB-PRESERVATION"
 DELETE_CONFIRMATION = "DELETE-VERIFIED-RUN"
@@ -58,6 +58,9 @@ SSH_OPTIONS = (
     "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=4",
     "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ControlMaster=auto",
+    "-o", "ControlPersist=600",
+    "-o", "ControlPath=~/.ssh/dyb-preserve-%C",
 )
 
 
@@ -67,8 +70,8 @@ def selection_record(mode):
     return {
         "mode": mode,
         "ad_detectors": [1, 2, 3, 4],
-        "ad_min_energy_mev": 0.7,
-        "counted_band_mev": [0.3, 0.7],
+        "ad_min_energy_mev": 0.6,
+        "counted_band_mev": [0.3, 0.6],
         "keep_non_ad": True,
     }
 
@@ -166,7 +169,7 @@ def parse_run_number(stem):
 
 
 def output_prefix(record):
-    # Older schema-3 archives used the catalog stem; keep them verifiable.
+    # Permit the catalog-stem naming convention when no prefix is recorded.
     prefix = validate_token(record.get("output_prefix", record["stem"]), "output prefix")
     if "output_prefix" in record:
         run = record.get("run_number")
@@ -462,6 +465,7 @@ def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False):
     hepjob_bin = "/afs/ihep.ac.cn/soft/common/sysgroup/hep_job/bin"
     command = [
         os.path.join(hepjob_bin, "hep_sub"), "-g", group, "-wt", walltime,
+        "-os", "AlmaLinux9",
         "-mem", str(memory_mb), str(run_dir / "array-job.sh"),
         "-argu", "%{ProcId}", "-n", str(marker["chunk_count"]),
     ]
@@ -981,10 +985,14 @@ def verify_all(local_root, root_verifier=None):
     }
 
 
-def validate_local_mount(local_root, mount_root):
+def validate_local_mount(local_root, mount_root, mount_uuid=None):
     mount_root = Path(mount_root).resolve()
     if not mount_root.exists() or not os.path.ismount(str(mount_root)):
         raise ValueError("required local disk is not mounted at {}".format(mount_root))
+    if mount_uuid:
+        actual = run_command(["findmnt", "-n", "-o", "UUID", "--target", str(mount_root)]).stdout.strip()
+        if actual != mount_uuid:
+            raise ValueError("mounted disk UUID {} differs from required {}".format(actual, mount_uuid))
     local_root = Path(local_root).resolve()
     try:
         local_root.relative_to(mount_root)
@@ -994,8 +1002,8 @@ def validate_local_mount(local_root, mount_root):
     return local_root
 
 
-def sync_run(alias, remote_result, local_root, mount_root):
-    local_root = validate_local_mount(local_root, mount_root)
+def sync_run(alias, remote_result, local_root, mount_root, mount_uuid=None):
+    local_root = validate_local_mount(local_root, mount_root, mount_uuid)
     final = local_root / remote_result["period"] / remote_result["hall"] / remote_result["stem"]
     if final.exists():
         verified = verify_local_run(final)
@@ -1018,7 +1026,7 @@ def sync_run(alias, remote_result, local_root, mount_root):
         "{}:{}/".format(alias, remote_result["run_dir"]), str(incoming) + "/",
     ]
     run_command(command)
-    validate_local_mount(local_root, mount_root)
+    validate_local_mount(local_root, mount_root, mount_uuid)
     verified = verify_local_run(incoming)
     if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"],
             verified["input_source"]) != (
@@ -1041,6 +1049,7 @@ def command_deploy(args):
     ssh_transport = "ssh " + " ".join(SSH_OPTIONS)
     run_command([
         "rsync", "-rlt", "--partial", "--exclude=.git/", "--exclude=bin/",
+        "--exclude=build/", "--exclude=staging/", "--exclude=*.root", "--exclude=*.partial",
         "--exclude=__pycache__/", "--exclude=.DS_Store", "-e", ssh_transport,
         str(project_root) + "/", "{}:{}/".format(args.alias, code_root),
     ])
@@ -1107,7 +1116,7 @@ def command_run(args):
     if args.delete_remote_after_sync and args.confirm_remote_delete != DELETE_CONFIRMATION:
         raise ValueError("remote deletion requires --confirm-remote-delete {}".format(
             DELETE_CONFIRMATION))
-    local_root = validate_local_mount(args.local_root, args.mount_root)
+    local_root = validate_local_mount(args.local_root, args.mount_root, args.mount_uuid)
     save_inventory_snapshot(local_root, records, args.input_source)
 
     for index, record in enumerate(selected, 1):
@@ -1157,7 +1166,7 @@ def command_run(args):
         result, _ = remote_json(args.alias, args.remote_code_root, [
             "_finalize", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
         ])
-        local_result = sync_run(args.alias, result, local_root, args.mount_root)
+        local_result = sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
         print("verified local files={} bytes={} path={}".format(
             local_result["files"], local_result["bytes"], local_result["directory"]), flush=True)
         if args.delete_remote_after_sync:
@@ -1193,6 +1202,7 @@ def build_parser():
     run.add_argument("--remote-stage-root", default=DEFAULT_STAGE_ROOT)
     run.add_argument("--local-root", required=True)
     run.add_argument("--mount-root", required=True)
+    run.add_argument("--mount-uuid", help="Linux: require this filesystem UUID before and after transfers")
     run.add_argument("--period", action="append", choices=[item[0] for item in CATALOGS])
     run.add_argument("--hall", action="append", choices=("EH1", "EH2", "EH3"))
     run.add_argument("--run-pattern")
@@ -1201,7 +1211,7 @@ def build_parser():
     run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,
                      help="mini (default): IHEP All-mini files; recon: original fixed-catalog paths")
     run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off",
-                     help="on: keep AD entries above 0.7 MeV plus every other detector; "
+                     help="on: keep AD entries above 0.6 MeV plus every other detector; "
                           "off (default): keep every entry (band counts are still recorded)")
     run.add_argument("--group", default="dyw")
     run.add_argument("--walltime", default="short")

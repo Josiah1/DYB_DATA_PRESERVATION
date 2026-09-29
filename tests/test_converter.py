@@ -17,7 +17,7 @@ import preserve
 
 PROJECT = Path(__file__).resolve().parent.parent
 CONVERTER = PROJECT / "bin" / "slim-root"
-AD_MIN, BAND_LOW = 0.7, 0.3
+AD_MIN, BAND_LOW = 0.6, 0.3
 MACRO = r'''
 #include <TDirectory.h>
 #include <TFile.h>
@@ -108,7 +108,7 @@ def as_float32(value):
 
 def synthetic_table(seed, count):
     rng = random.Random(seed)
-    specials = [0.3, 0.7, 0.30000001, 0.70000005, 0.0, -0.5, float("nan"), 15.0]
+    specials = [0.3, 0.6, 0.7, 0.30000001, 0.59999995, 0.60000005, 0.0, -0.5, float("nan"), 15.0]
     rows = []
     base = 1500000000 + 1000 * seed
     for _ in range(count):

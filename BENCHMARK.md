@@ -1,5 +1,23 @@
 # Storage and throughput estimate
 
+## Single-disk selection: 2026-09-29
+
+The [new worker benchmark](estimates/energy-threshold-2026-09-29/README.md)
+tested no cut and AD cuts at 0.3, 0.4, 0.5, 0.6, and 0.7 MeV on the same
+48 files. All 288 outputs passed full retained-value and duration checks.
+**Raw AD energy > 0.6 MeV** is the lowest tested cut whose upper sample
+envelope fits within 90% of the empty disk's 14.00 TB free space: **11.84 TB**
+weighted estimate, **12.35 TB** upper envelope. At 0.5 MeV the upper envelope
+is 14.24 TB. Every non-AD trigger is retained. Production uses schema 4 /
+`dyb-slim-v5`, with the 0.6-MeV band explicitly named in counts and metadata.
+This selection is not a lossless substitute for TWin's corrected-energy cuts.
+
+The measured selected conversion projects about 169 CPU-days on the sampled
+batch workers, excluding queue time, transfer and final verification. Per-run
+timing during production provides the operational estimate.
+
+## Previous lossless benchmark
+
 The current no-energy-cut IHEP-mini benchmark is documented in
 [`estimates/noenergy-2026-09-27/`](estimates/noenergy-2026-09-27/README.md).
 It measured the then-current ZSTD-7 converter with `--ad-selection off` and

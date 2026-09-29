@@ -42,7 +42,7 @@ compression timing; a final basket may be smaller than the target size.
 
 No energy selection is applied by default. TWin corrects AD energies itself;
 its normal threshold is 0.7 MeV, while `--acpo` uses 0.3 MeV. An opt-in raw
-0.7 MeV preservation cut is not a lossless substitute for these selections.
+0.6 MeV preservation cut is not a lossless substitute for these selections.
 
 ## Run the analysis
 

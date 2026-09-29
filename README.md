@@ -6,11 +6,12 @@ analyses. It processes one run at a time, copies that run to a mounted local
 disk, verifies it, and only then permits deletion of that run's cluster
 staging area.
 
-Production has **not** been started. The repository is ready for review and a
-small real-data pilot with original recon inputs has passed. The subsequent
-48-file IHEP mini-to-slim no-cut benchmark also passed full retained-value
-and duration comparisons; a batch-worker pilot is still needed. An explicit
-later order and the mounted destination disk are required for production.
+The single-disk campaign was authorized on **2026-09-29**. Its 48-file,
+288-conversion worker benchmark selected **raw AD energy > 0.6 MeV**, with
+an estimated **11.84 TB** output and a **12.35 TB** upper sample envelope for
+the empty 14-TB disk. See the [threshold study](estimates/energy-threshold-2026-09-29/README.md)
+and [campaign runbook](OPERATIONS.md#single-disk-campaign-2026-09-29) for the
+destination, validation, and launch command.
 See [OPERATIONS.md](OPERATIONS.md) for
 the runbook and [BENCHMARK.md](BENCHMARK.md) for measured resource estimates.
 The default now retains every event, leaving corrected-energy selection to
@@ -54,7 +55,8 @@ automatic fallback, exclusion, or version substitution. New-run preparation
 opens every input and checks its ROOT header before staging. Missing or
 unreadable files stop the run. Input source is recorded in run and archive
 metadata; resume, transfer, cleanup and final verification check this choice.
-Older schema-3 metadata without this field remains readable as `recon`.
+Schema-3 archives use the previous toolchain at commit `5479aef`; schema 4
+records the new 0.6-MeV count band and refuses to mix with that older format.
 
 The [mini-file inspection](estimates/mini-branches-2026-09-27/README.md) passed
 the required-branch/type checks on 48 samples. A separate full-entry comparison
@@ -72,7 +74,7 @@ mini productions, which may have different branch content.
 ## Output format
 
 ROOT with **ZSTD level 9 and 256 KiB branch baskets** is the default
-(`dyb-slim-v4`). Automatic basket-size adaptation and autosave are disabled;
+(`dyb-slim-v5`, schema 4). Automatic basket-size adaptation and autosave are disabled;
 event baskets are flushed at each source boundary for bounded memory and
 per-source timing. The lossless codec comparison in [BENCHMARK.md](BENCHMARK.md)
 measured a smaller, slower LZMA alternative; it has not been adopted.
@@ -87,7 +89,7 @@ Each chunk contains at most 16 source files and these trees:
   `keptEntries`), source entry count before selection (`entries`), source byte
   count, earliest/latest trigger timestamp, data duration, per-source
   compression wall/CPU duration, and the per-AD counts `adBelow0p3MeV[4]` and
-  `adFrom0p3To0p7MeV[4]`.
+  `adFrom0p3To0p6MeV[4]`.
 - `/Preservation/selection`: a `TNamed` whose title states the selection rule
   the chunk was written with; the verifier refuses any other text.
 
@@ -102,11 +104,11 @@ using their original catalog-stem filenames.
 The selection is **off by default** and switched with `--ad-selection on|off` on
 the `run` command (the converter takes the same flag). With it on, an entry
 from an antineutrino detector (`detector` 1-4) is written only when
-`energy > 0.7 MeV`; every entry from any other detector (water pools, RPC) is
+`energy > 0.6 MeV`; every entry from any other detector (water pools, RPC) is
 written unchanged. Dropped AD entries are not lost as counts: for each source
 file and each AD, `adBelow0p3MeV` counts entries with `energy <= 0.3 MeV` or
-NaN and `adFrom0p3To0p7MeV` counts entries with `0.3 < energy <= 0.7 MeV`, so
-`entries = keptEntries + sum(adBelow0p3MeV) + sum(adFrom0p3To0p7MeV)` holds for
+NaN and `adFrom0p3To0p6MeV` counts entries with `0.3 < energy <= 0.6 MeV`, so
+`entries = keptEntries + sum(adBelow0p3MeV) + sum(adFrom0p3To0p6MeV)` holds for
 every source. The earliest and latest trigger timestamps and the data duration
 are taken over every trigger in the source, dropped ones included. With the
 selection off every entry is written, `keptEntries = entries`, and the two AD
@@ -124,7 +126,7 @@ must not yet be considered a lossless TWin input. See the
 
 Every completed run also has `durations.tsv`, with exactly one row per source
 file in the fixed catalog order and the same per-source columns, including
-`keptEntries` and the eight `ad{N}Below0p3MeV`/`ad{N}From0p3To0p7MeV` counts.
+`keptEntries` and the eight `ad{N}Below0p3MeV`/`ad{N}From0p3To0p6MeV` counts.
 The acquisition duration is calculated as an exact signed 64-bit nanosecond
 difference before conversion to ROOT `Double_t`; the double fields are printed
 with 17 significant digits for round-trip-safe text. Integer second/nanosecond endpoints are retained as an exact reference.
@@ -147,7 +149,7 @@ One run is handled as one transaction:
 4. Reopen every ROOT chunk and validate trees, branches, the selection tag,
    per-source selection accounting, entry totals, timing fields, and
    timestamp-derived durations; with the selection on, rescan every kept AD
-   entry for `energy > 0.7 MeV`; cross-check each chunk's kept entries, source
+   entry for `energy > 0.6 MeV`; cross-check each chunk's kept entries, source
    entries, source count, and mode against its timing rows.
 5. Aggregate one `durations.tsv` and SHA-256 every preserved artifact.
 6. Recheck the external mount, `rsync` to `.incoming`, recheck the mount, and
@@ -217,13 +219,17 @@ checked or migrated independently; this does not update them in place.
 
 ## Current estimate
 
-Plan for **25 TB of usable destination space** for one archive copy.
+The authorized **single-disk selection-on campaign** projects **11.84 TB**,
+with an upper sample envelope of **12.35 TB**, for the disk with 14.00 TB
+available. The launcher explicitly selects `--ad-selection on` (0.6 MeV).
+For an **all-event archive**, plan for **25 TB of usable destination space**.
 The 2026-09-27 IHEP-mini test, with **no energy selection**, projects **18.59
 TB** for the adopted ROOT/ZSTD-9/256-KiB setting, or **16.69 TB** with the tested
 ROOT/LZMA alternative. The old ZSTD-7 baseline projected **65.45 CPU-days**;
 that is not an end-to-end timing estimate for the new setting. ZSTD-9 repacking
-took 2.11 times the paired ZSTD-7 repacking CPU. A batch-worker pilot is still
-needed to set the new CPU budget. These are sample-based projections, not
+took 2.11 times the paired ZSTD-7 repacking CPU. The September 29 worker sweep
+projects 169 CPU-days with the 0.6-MeV cut, before transfer and final checks.
+These are sample-based projections, not
 completed-campaign measurements. See
 [BENCHMARK.md](BENCHMARK.md#current-all-event-estimate-ihep-minis-2026-09-27)
 for weighting, sensitivity and timing boundaries.
@@ -238,4 +244,4 @@ for the whole archive.
 The 4,009 fixed catalogs contain exactly 831,334 source files and
 will require 53,821 16-file tasks. The complete repository snapshot fixes all
 4,009 run catalogs and 831,334 source paths independently of catalog-filesystem
-availability. Production remains gated on the explicit start order.
+availability. The September 29 start order applies to the single-disk campaign.

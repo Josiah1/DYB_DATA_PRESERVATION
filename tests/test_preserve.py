@@ -9,6 +9,17 @@ import preserve
 
 
 class PreserveTests(unittest.TestCase):
+    def test_mount_identity_is_checked_before_creating_the_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary)
+            archive = mount / "data"
+            with mock.patch("preserve.os.path.ismount", return_value=True), \
+                    mock.patch("preserve.run_command", return_value=mock.Mock(stdout="disk-a\n")):
+                with self.assertRaisesRegex(ValueError, "UUID"):
+                    preserve.validate_local_mount(archive, mount, "disk-b")
+                self.assertFalse(archive.exists())
+                self.assertEqual(preserve.validate_local_mount(archive, mount, "disk-a"), archive)
+
     def test_catalog_backups_are_complete_and_used(self):
         report = preserve.verify_catalog_backups()
         self.assertEqual(
