@@ -21,7 +21,7 @@ budget that reserves 10% of the disk's 14.00 TB free space.
 - Data: `/media/josiah/LAYJ萤捷1/DYB_DATA_PRESERVATION/data`.
 - Code and staging: `/scratchfs2/dyw/lijj16/DYB_DATA_PRESERVATION/{code,staging}` on `dayabay1`.
 - Format: `dyb-slim-v5`, metadata schema 4, `adFrom0p3To0p6MeV` count band.
-- Local checks: `make test`; on IHEP all 12 tests passed, including both ROOT tests.
+- Checks: `make test`; all 13 tests passed on IHEP, including both ROOT tests.
 - Catalog inventory: 4,009 catalogs, 831,334 source files, no catalog failures.
 
 The one-run pilot **P17B/EH1/run21221** (HepJob **81751470**) passed: 217 mini
@@ -30,6 +30,14 @@ and 2,683,398,113 bytes including the duration table. All 15 artifact SHA-256
 hashes passed on the destination disk before the generated remote staging
 was removed. This verified run remains in the archive and is skipped on resume.
 See [pilot.json](estimates/energy-threshold-2026-09-29/pilot.json).
+
+The next run, P17B/EH1/run21228, has an unavailable mini for file 0200.
+Its exact original passed a full read of all 19 required branches across
+755,835 entries; [fallback-input-check.json](estimates/energy-threshold-2026-09-29/fallback-input-check.json)
+records the branch signatures. The launcher explicitly uses `mini-or-recon`
+to retain every catalog file: unavailable minis use only their matching
+originals, with the choice and reason frozen in `run.json`. The original
+catalog, ordering, reconstruction version, and selected branch format stay fixed.
 
 `scripts/run_campaign.sh` locates this UUID, explicitly enables the selected
 cut, and supplies the already-authorized execution and verified-staging
@@ -117,13 +125,18 @@ not bypass this gate.
 defaults to `--input-source mini`, using `/lustrefs/juno26/dyw/rec/All-mini`
 with the exact run/file/version identities from those catalogs. New-run
 preparation opens every mapped source and checks its four-byte ROOT signature
-before staging. Unavailable inputs stop the run; no file is silently skipped
-or replaced. The September 2 mini index leaves 4,087 required paths unlisted;
+before staging. Unavailable inputs stop strict `mini` mode. The campaign's
+explicit `mini-or-recon` mode tries the exact original for each unavailable
+mini and records `resolved_inputs` and `reconstruction_fallbacks` in the run
+metadata. If both copies fail, the run stops; no file is skipped.
+The September 2 mini index leaves 4,087 required paths unlisted;
 see `estimates/mini-branches-2026-09-27/`. A dry run does not open source files.
 
 For an explicit original-reconstruction campaign, use `--input-source recon`.
-Use one source per local archive. The archive snapshot and run metadata pin
-the choice; restarting with a different source is refused. Older schema-3
+The archive snapshot and run metadata pin the choice. The only allowed policy
+change is an explicit `mini` to `mini-or-recon` upgrade with the same catalog
+snapshot; completed mini runs remain valid and retain their original metadata.
+Other source changes are refused. Older schema-3
 archives require the previous toolchain at `5479aef`. Deploy the updated
 `preserve.py` before using the new default on the cluster.
 

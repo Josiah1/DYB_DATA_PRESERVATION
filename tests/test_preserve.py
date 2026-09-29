@@ -9,6 +9,46 @@ import preserve
 
 
 class PreserveTests(unittest.TestCase):
+    def test_exact_original_fallback_is_explicit_and_frozen_on_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = ["/dybfs/rec/P17B/rec/runs_0021000/runs_0021200/run_0021228/"
+                        "recon.Neutrino.0021228.Physics.EH1-Merged.P17B-I._{:04d}.root".format(i)
+                        for i in (1, 2)]
+            minis = preserve.resolve_inputs(original)
+            catalog = root / "run21228.list"
+            catalog.write_text("\n".join(original) + "\n")
+
+            def check(paths):
+                if minis[1] in paths:
+                    raise ValueError("missing second mini")
+
+            with mock.patch("preserve.check_input_files", side_effect=check):
+                with self.assertRaisesRegex(ValueError, "missing second mini"):
+                    preserve.prepare_run(str(catalog), "P17B", "EH1", str(root / "strict"),
+                                         str(root / "code"), 16, require_registered=False)
+                marker = preserve.prepare_run(str(catalog), "P17B", "EH1", str(root / "stage"),
+                                              str(root / "code"), 16, require_registered=False,
+                                              input_source="mini-or-recon")
+            expected = [minis[0], original[1]]
+            self.assertEqual(preserve.recorded_inputs(original, marker), expected)
+            self.assertEqual((Path(marker["run_dir"]) / "chunks/000000.list").read_text().splitlines(), expected)
+            self.assertEqual(marker["reconstruction_fallbacks"][0]["recon"], original[1])
+            with mock.patch("preserve.check_input_files", side_effect=AssertionError("must use frozen inputs")):
+                resumed = preserve.prepare_run(str(catalog), "P17B", "EH1", str(root / "stage"),
+                                               str(root / "code"), 16, require_registered=False,
+                                               input_source="mini-or-recon")
+            self.assertEqual(resumed["resolved_inputs"], expected)
+            for wrong in ([], [minis[0], original[0]], [minis[0], "/other/version.root"]):
+                with self.assertRaisesRegex(ValueError, "exact mini/recon identities"):
+                    preserve.recorded_inputs(original, dict(marker, resolved_inputs=wrong))
+            with mock.patch("preserve.check_input_files", side_effect=ValueError("unavailable")):
+                with self.assertRaisesRegex(ValueError, "unavailable"):
+                    preserve.prepare_run(str(catalog), "P17B", "EH1", str(root / "unavailable"),
+                                         str(root / "code"), 16, require_registered=False,
+                                         input_source="mini-or-recon")
+            self.assertFalse((root / "unavailable/P17B/EH1/run21228").exists())
+
     def test_mount_identity_is_checked_before_creating_the_archive(self):
         with tempfile.TemporaryDirectory() as temporary:
             mount = Path(temporary)
@@ -206,6 +246,15 @@ class PreserveTests(unittest.TestCase):
             self.assertEqual(preserve.verify_all(archive)["input_source"], "mini")
             with self.assertRaisesRegex(ValueError, "input source differs"):
                 preserve.save_inventory_snapshot(archive, snapshot["records"], "recon")
+            preserve.save_inventory_snapshot(archive, snapshot["records"], "mini-or-recon")
+            self.assertEqual(preserve.verify_all(archive)["input_source"], "mini-or-recon")
+            result.update(input_source="mini-or-recon", resolved_inputs=[mini_path])
+            preserve.atomic_json(run_dir / "run.json", result)
+            self.assertEqual(preserve.verify_all(archive)["input_source"], "mini-or-recon")
+            result["resolved_inputs"] = ["/wrong/source.root"]
+            preserve.atomic_json(run_dir / "run.json", result)
+            with self.assertRaisesRegex(ValueError, "exact mini/recon identities"):
+                preserve.verify_local_run(run_dir)
             result["input_source"] = "recon"
             preserve.atomic_json(run_dir / "run.json", result)
             with self.assertRaisesRegex(ValueError, "order does not match"):

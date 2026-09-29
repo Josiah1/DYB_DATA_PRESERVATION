@@ -37,10 +37,10 @@ EH1, EH2, and EH3 are included. No newer reconstruction or good-run-list
 version is substituted. All 4,009 per-run catalogs are preserved under
 `catalog_backups/` with SHA-256 checksums, and the tool inventories and stages
 runs from this complete repository snapshot rather than rediscovering catalogs
-from the cluster filesystem. At production start, an immutable local
+from the cluster filesystem. At production start, a local
 `catalog-inventory.json` records every expected run, catalog SHA-256, and
-source-file count so final completeness can be checked without relying on
-memory or scheduler history.
+source-file count. This catalog set stays fixed so final completeness can be
+checked without relying on memory or scheduler history.
 
 Conversion defaults to the matching mini-reconstruction files under
 `/lustrefs/juno26/dyw/rec/All-mini` (`--input-source mini`). A frozen path
@@ -48,13 +48,17 @@ Conversion defaults to the matching mini-reconstruction files under
 `/lustrefs/juno26/dyw/rec/All-mini/runs_.../runs_.../run_.../minirecon....root`.
 Run, stream (Neutrino/NoTag), hall, version and file number are unchanged.
 `catalog.list` and its checksum retain the original catalog; chunk lists and
-timing/provenance paths identify the actual mini inputs.
+timing/provenance paths identify the actual inputs.
 
-Use `--input-source recon` explicitly for the original files. There is no
-automatic fallback, exclusion, or version substitution. New-run preparation
-opens every input and checks its ROOT header before staging. Missing or
-unreadable files stop the run. Input source is recorded in run and archive
-metadata; resume, transfer, cleanup and final verification check this choice.
+Use `--input-source recon` for the original files. The single-disk launcher
+uses `--input-source mini-or-recon`: when a mini cannot be opened or has an
+invalid ROOT header, preparation checks that file's exact original catalog
+path. The resolved paths and fallback reasons are frozen in run metadata;
+resume and verification use those recorded paths. There is no version
+substitution or file exclusion. If neither copy passes, the run stops.
+Plain `mini` and `recon` modes remain strict. An explicit switch from `mini`
+to `mini-or-recon` preserves already verified mini runs and records the
+policy change in the archive snapshot.
 Schema-3 archives use the previous toolchain at commit `5479aef`; schema 4
 records the new 0.6-MeV count band and refuses to mix with that older format.
 
@@ -65,8 +69,9 @@ in all 19 required branches and no missing, added or reordered events.
 This includes all three files in the flasher canvas and the three earlier
 pilot samples; it is not an archive-wide equivalence check. The September 2 archive index
 lists 827,247 of 831,334 required files, leaving 4,087 unlisted; this is not a
-fresh all-file availability check. Completeness still needs resolution before
-a full campaign. A [flasher-variable canvas](plots/residual_flasher/README.md)
+fresh all-file availability check. The campaign checks each run before staging
+and stops if both copies of a required input are unavailable.
+A [flasher-variable canvas](plots/residual_flasher/README.md)
 records a separate three-file diagnostic sample.
 These findings apply to the current named `All-mini` samples, not to older
 mini productions, which may have different branch content.
@@ -186,7 +191,7 @@ python3 preserve.py verify-local /mounted/archive/P17B/EH1/RUN_STEM
 After all runs are copied, check the complete archive against the saved fixed
 inventory, rehash every artifact, check every run's selection mode and entry
 totals against its timing table, and refuse an archive that mixes selection
-modes or input sources:
+modes or violates its recorded input-source policy:
 
 ```bash
 python3 preserve.py verify-all /mounted/archive

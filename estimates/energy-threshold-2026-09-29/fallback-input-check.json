@@ -1,0 +1,104 @@
+{
+  "check": "Full read and SHA-256 of every required source branch; missing matching mini, exact fixed-catalog original used.",
+  "checked_at": "2026-09-29",
+  "entries": 755835,
+  "required_branch_signatures": {
+    "Kurtosis": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "2c0e65e136e2eaf20cf63e75dbb885cb8d483c5e476ce50f2b1adef1e7499113"
+    },
+    "MaxQ": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "328cfc8a051d0765f594be4e46488971021ad36c88b282371d034dd9882a8627"
+    },
+    "MaxQ_2inchPMT": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "437d6d77e60171231aebd83062b7c9e2c7b337cbc28a75597b3643231948d44b"
+    },
+    "MiddleTimeRMS": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "407ef4446e66bb1816b57e3dc6d5f50f2058b8a8b5f29982c8bc4fa87a7fd09f"
+    },
+    "Q1": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "cf8dd2f277cb2c48987a939338db8985dbcd7f5e0e65fade4ad75f40259e794e"
+    },
+    "Q2": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "1548fd118f3c11e8e35301238eaa57f5596f25dd4973c2537c562a947a1c8b5b"
+    },
+    "Quadrant": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "59fdc0e7631c30072ba15164bea48268a87f4f0365ef2e8ffdf73c8407588c41"
+    },
+    "detector": {
+      "dtype": "int16",
+      "entries": 755835,
+      "sha256": "dc94bf6cdd0c229fd8221ff5dcbf4a80054bc60729c442390d909bac1f663c59"
+    },
+    "energy": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "7fefd46b1a33a0316edcf5aeb0bf689fcc4f9b669f33416b499fb7198e4e6c2e"
+    },
+    "nHit": {
+      "dtype": "int32",
+      "entries": 755835,
+      "sha256": "cbb7cd5b7f641ca8713bad55d8845be1c64752720a50bcf2017ded12ec26d754"
+    },
+    "site": {
+      "dtype": "int16",
+      "entries": 755835,
+      "sha256": "b9353bfaaf510060eb53c182e8fe66333d2c24c82e87235b55f1683642f5e08e"
+    },
+    "time_PSD_local_RMS": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "241fd81b65b8fe6f17df164302ca3a86b7463f203ab121f80e08127929b16dbc"
+    },
+    "triggerNumber": {
+      "dtype": "uint32",
+      "entries": 755835,
+      "sha256": "6cc45c78a25f2e8ad7def9f7116db26a5ad983b9a3462f2a6d9e2bf716a8b2c6"
+    },
+    "triggerTimeNanoSec": {
+      "dtype": "int32",
+      "entries": 755835,
+      "sha256": "8eba9b2ed6345e308c444a8ad47abf4f4c34d24f1a90467c4d29774d1d8f212c"
+    },
+    "triggerTimeSec": {
+      "dtype": "int32",
+      "entries": 755835,
+      "sha256": "22a6c4dd0afc356a139ffcf66b42924fbc587c3023236601d113659a0e808109"
+    },
+    "triggerType": {
+      "dtype": "uint32",
+      "entries": 755835,
+      "sha256": "36ae8856e44e341dbcc78ec7232fde97cf7b6f644fb8e58cc637dc43a7cb3995"
+    },
+    "x": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "2cc79ea53b47329480c875df8ebdef5f1c9c5e8cca79fc0162f018ef681264a1"
+    },
+    "y": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "f5f42c237ee5bc4bdc9b6efcfdecd34caea33e03b7b000e6d5e27b037d3e8b3e"
+    },
+    "z": {
+      "dtype": "float32",
+      "entries": 755835,
+      "sha256": "3c6e7416039ddd84033436f3e9a8277d2a0745d5a34ef4dd267c1368f98441fa"
+    }
+  },
+  "runtime": "IHEP LCG 110, ROOT 6.40.02",
+  "source": "/dybfs/rec/P17B/rec/runs_0021000/runs_0021200/run_0021228/recon.Neutrino.0021228.Physics.EH1-Merged.P17B-I._0200.root"
+}

@@ -21,7 +21,7 @@ import time
 
 SCHEMA_VERSION = 4
 AD_SELECTION_MODES = ("on", "off")
-INPUT_SOURCES = ("mini", "recon")
+INPUT_SOURCES = ("mini", "recon", "mini-or-recon")
 DEFAULT_INPUT_SOURCE = "mini"
 MINI_ROOT = "/lustrefs/juno26/dyw/rec/All-mini"
 AD_COUNT_COLUMNS = tuple(
@@ -207,6 +207,8 @@ def input_source_mode(record):
 
 def resolve_inputs(paths, source=DEFAULT_INPUT_SOURCE):
     input_source_mode({"input_source": source})
+    if source == "mini-or-recon":
+        raise ValueError("mini-or-recon requires the run's frozen resolved_inputs")
     if source == "recon":
         return list(paths)
     pattern = re.compile(
@@ -220,6 +222,18 @@ def resolve_inputs(paths, source=DEFAULT_INPUT_SOURCE):
             raise ValueError("cannot map fixed source to mini input: {}".format(path))
         resolved.append(str(Path(MINI_ROOT) / match.group(2) / ("mini" + match.group(4))))
     return resolved
+
+
+def recorded_inputs(paths, record):
+    source = input_source_mode(record)
+    if source != "mini-or-recon":
+        return resolve_inputs(paths, source)
+    inputs = record.get("resolved_inputs")
+    minis = resolve_inputs(paths, "mini")
+    if (not isinstance(inputs, list) or len(inputs) != len(paths) or
+            any(actual not in (original, mini) for actual, original, mini in zip(inputs, paths, minis))):
+        raise ValueError("resolved inputs do not match the fixed catalog's exact mini/recon identities")
+    return inputs
 
 
 def check_input_files(paths):
@@ -371,7 +385,7 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
                             "output_prefix": "preserved.{:07d}".format(run_number)})
     catalog_data, catalog_source, catalog_backup = read_catalog_data(period, hall, catalog)
     catalog_sha = hashlib.sha256(catalog_data).hexdigest()
-    inputs = resolve_inputs(parse_catalog_inputs(catalog_data, catalog), input_source)
+    catalog_paths = parse_catalog_inputs(catalog_data, catalog)
 
     run_dir = (Path(stage_root) / period / hall / stem).resolve()
     if run_dir.exists():
@@ -382,9 +396,23 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
                   input_source_mode(marker), marker.get("output_prefix"))
         if actual != expected:
             raise ValueError("existing run staging does not match requested catalog")
+        recorded_inputs(catalog_paths, marker)
         return marker
 
-    check_input_files(inputs)
+    fallbacks = []
+    if input_source == "mini-or-recon":
+        inputs = resolve_inputs(catalog_paths, "mini")
+        for index, path in enumerate(inputs):
+            try:
+                check_input_files([path])
+            except ValueError as error:
+                original = catalog_paths[index]
+                check_input_files([original])
+                inputs[index] = original
+                fallbacks.append({"mini": path, "recon": original, "reason": str(error)})
+    else:
+        inputs = resolve_inputs(catalog_paths, input_source)
+        check_input_files(inputs)
     run_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".{}.prepare-".format(stem), dir=str(run_dir.parent)))
     try:
@@ -432,6 +460,9 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
         }
         if catalog_backup:
             marker["catalog_backup"] = catalog_backup
+        if input_source == "mini-or-recon":
+            marker["resolved_inputs"] = inputs
+            marker["reconstruction_fallbacks"] = fallbacks
         atomic_json(temporary / "manifest.json", marker)
         atomic_json(temporary / MARKER_NAME, marker)
         os.rename(str(temporary), str(run_dir))
@@ -604,8 +635,7 @@ def aggregate_duration_reports(run_dir, marker, prefix):
     catalog = run_dir / "catalog.list"
     if sha256_file(catalog) != marker["catalog_sha256"]:
         raise ValueError("staged catalog checksum does not match run marker")
-    inputs = resolve_inputs(parse_catalog_inputs(catalog.read_bytes(), str(catalog)),
-                            input_source_mode(marker))
+    inputs = recorded_inputs(parse_catalog_inputs(catalog.read_bytes(), str(catalog)), marker)
     chunks = split_chunks(inputs, marker["files_per_job"])
     if len(chunks) != marker["chunk_count"]:
         raise ValueError("staged chunk count does not match fixed catalog")
@@ -819,7 +849,7 @@ def verify_local_run(directory, root_verifier=None):
     if complete.read_text(encoding="utf-8").strip() != result["catalog_sha256"]:
         raise ValueError("local completion marker does not match the catalog")
     durations = validate_duration_table(
-        directory / result["duration_file"], resolve_inputs(catalog_paths, input_source),
+        directory / result["duration_file"], recorded_inputs(catalog_paths, result),
         result["files_per_job"], mode)
     duration_rows = durations["rows"]
     if (duration_rows, durations["entries"], durations["kept"]) != (
@@ -912,7 +942,10 @@ def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOUR
         if catalog_signature(previous.get("records", [])) != catalog_signature(records):
             raise ValueError("fixed catalog inventory differs from the existing local snapshot")
         if input_source_mode(previous) != input_source:
-            raise ValueError("input source differs from the existing local snapshot")
+            if input_source_mode(previous) != "mini" or input_source != "mini-or-recon":
+                raise ValueError("input source differs from the existing local snapshot")
+            previous.update(input_source=input_source, previous_input_source="mini", source_policy_updated_at=utc_now())
+            atomic_json(path, previous)
         return path
     atomic_json(path, {
         "kind": "dyb-preserve-catalog-inventory",
@@ -967,9 +1000,11 @@ def verify_all(local_root, root_verifier=None):
         input_sources.add(verified["input_source"])
     if len(modes) != 1:
         raise ValueError("archive mixes AD selection modes: {}".format(sorted(modes)))
-    if len(input_sources) != 1:
+    policy = input_source_mode(snapshot)
+    if len(input_sources) != 1 and policy != "mini-or-recon":
         raise ValueError("archive mixes input sources: {}".format(sorted(input_sources)))
-    if input_sources != {input_source_mode(snapshot)}:
+    allowed = {"mini", "mini-or-recon"} if policy == "mini-or-recon" else {policy}
+    if not input_sources <= allowed:
         raise ValueError("archive input source differs from its catalog inventory snapshot")
     return {
         "complete": True,
@@ -978,7 +1013,7 @@ def verify_all(local_root, root_verifier=None):
         "source_entries": total_entries,
         "kept_entries": total_kept,
         "ad_selection": modes.pop(),
-        "input_source": input_sources.pop(),
+        "input_source": policy,
         "artifacts": total_artifacts,
         "bytes": total_bytes,
         "local_root": str(local_root),
@@ -1125,9 +1160,10 @@ def command_run(args):
         local_run = local_root / record["period"] / record["hall"] / record["stem"]
         if local_run.exists():
             existing = verify_local_run(local_run)
-            if (existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"],
-                    existing["input_source"]) != (
-                    record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection, args.input_source):
+            allowed = {"mini", "mini-or-recon"} if args.input_source == "mini-or-recon" else {args.input_source}
+            if ((existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"]) !=
+                    (record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection) or
+                    existing["input_source"] not in allowed):
                 raise ValueError("existing local run does not match the fixed catalog/schema/selection/input source")
             print("already verified locally; skipping cluster processing", flush=True)
             continue
@@ -1139,6 +1175,9 @@ def command_run(args):
             "--input-source", args.input_source,
         ]
         marker, _ = remote_json(args.alias, args.remote_code_root, prepare_args)
+        if marker.get("reconstruction_fallbacks"):
+            print("recorded exact original recon inputs for {} unavailable minis".format(
+                len(marker["reconstruction_fallbacks"])), flush=True)
         status, _ = remote_json(args.alias, args.remote_code_root, [
             "_status", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
         ])
@@ -1209,7 +1248,8 @@ def build_parser():
     run.add_argument("--limit-runs", type=int)
     run.add_argument("--files-per-job", type=int, default=16)
     run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,
-                     help="mini (default): IHEP All-mini files; recon: original fixed-catalog paths")
+                     help="mini (default): All-mini; recon: fixed originals; mini-or-recon: "
+                          "explicitly record exact originals for unavailable minis")
     run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off",
                      help="on: keep AD entries above 0.6 MeV plus every other detector; "
                           "off (default): keep every entry (band counts are still recorded)")
