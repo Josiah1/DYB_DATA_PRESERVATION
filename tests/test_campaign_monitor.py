@@ -20,3 +20,5 @@ class CampaignMonitorTests(unittest.TestCase):
         finished = status_record(progress, service, previous, 3700)
         self.assertIsNone(finished['alert'])
         self.assertFalse(finished['complete'])
+        service['ActiveState'] = 'failed'
+        self.assertIn('failed', status_record(progress, service, previous, 3700)['alert'])

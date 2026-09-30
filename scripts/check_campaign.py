@@ -18,11 +18,11 @@ def status_record(progress, service, previous, now):
                service.get("InvocationID") != previous.get("service", {}).get("InvocationID"))
     last_progress = now if changed else previous.get("last_progress_time", now)
     alert = None
-    if not progress["finished"]:
-        if service.get("ActiveState") not in ("active", "activating"):
-            alert = "Controller is {} (exit {})".format(service.get("ActiveState"), service.get("ExecMainStatus"))
-        elif now - last_progress >= 3600:
-            alert = "No new verified output for one hour; inspect the controller and jobs"
+    if service.get("ActiveState") == "failed" or (
+            not progress["finished"] and service.get("ActiveState") not in ("active", "activating")):
+        alert = "Controller is {} (exit {})".format(service.get("ActiveState"), service.get("ExecMainStatus"))
+    elif not progress["finished"] and now - last_progress >= 3600:
+        alert = "No new verified output for one hour; inspect the controller and jobs"
     return dict(progress, service=service, checked_at=preserve.utc_now(),
                 last_progress_time=last_progress, alert=alert, metadata_summary_only=True)
 
