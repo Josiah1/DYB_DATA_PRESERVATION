@@ -4,6 +4,8 @@
 import argparse
 import concurrent.futures
 import datetime as dt
+import errno
+import fcntl
 import functools
 import hashlib
 import json
@@ -226,14 +228,111 @@ def resolve_inputs(paths, source=DEFAULT_INPUT_SOURCE):
 
 def recorded_inputs(paths, record):
     source = input_source_mode(record)
-    if source != "mini-or-recon":
+    if ((record.get("skip_missing_minis") and source != "mini") or
+            (record.get("skipped_inputs") and not record.get("skip_missing_minis"))):
+        raise ValueError("gaps require the recorded mini-only skip policy")
+    if source != "mini-or-recon" and not record.get("skip_missing_minis"):
         return resolve_inputs(paths, source)
     inputs = record.get("resolved_inputs")
     minis = resolve_inputs(paths, "mini")
+    skipped = record.get("skipped_inputs", [])
+    gaps = {}
+    for issue in skipped:
+        index = issue["catalog_index"]
+        if (type(index) is not int or not 0 <= index < len(paths) or index in gaps or
+                issue["catalog_entry"] != paths[index]):
+            raise ValueError("invalid skipped catalog identity")
+        dt.datetime.fromisoformat(issue["observed_at"])
+        check = issue["mini_check"]
+        if (source != "mini" or check["path"] != minis[index] or check["status"] != "missing" or
+                not check["attempts"] or check["attempts"][-1]["status"] != "missing" or
+                check["attempts"][-1]["errno"] != errno.ENOENT):
+            raise ValueError("skipped input is not a confirmed missing mini")
+        gaps[index] = issue
     if (not isinstance(inputs, list) or len(inputs) != len(paths) or
-            any(actual not in (original, mini) for actual, original, mini in zip(inputs, paths, minis))):
+            any(actual is not None if index in gaps else
+                actual not in ((mini,) if source == "mini" else (original, mini))
+                for index, (actual, original, mini) in enumerate(zip(inputs, paths, minis)))):
         raise ValueError("resolved inputs do not match the fixed catalog's exact mini/recon identities")
-    return inputs
+    usable = [path for path in inputs if path is not None]
+    if record.get("skip_missing_minis") and (
+            record.get("processed_input_count") != len(usable) or
+            record.get("skipped_input_count") != len(skipped)):
+        raise ValueError("processed and skipped input accounting does not match the catalog")
+    if not skipped and record.get("skipped_input_count", 0):
+        raise ValueError("skipped input count has no gap records")
+    return usable
+
+
+def probe_input(path):
+    """Read-only header check; retry transient storage errors twice, never permissions."""
+    attempts = []
+    for attempt in range(3):
+        code, reason = None, None
+        try:
+            with open(path, "rb") as stream:
+                status = "ok" if stream.read(4) == b"root" else "invalid_root"
+            if status == "invalid_root":
+                reason = "not a ROOT file header"
+        except OSError as error:
+            code, reason = error.errno, str(error)
+            if code == errno.ENOENT:
+                status = "missing"
+            elif code in (errno.EIO, errno.ESTALE, errno.ETIMEDOUT):
+                status = "io_error"
+            else:
+                raise  # Permission, descriptor, device and other systemic errors stop the run.
+        attempts.append(dict(timestamp=utc_now(), status=status, errno=code, reason=reason))
+        if status not in ("missing", "io_error"):
+            break
+        if status == "missing" and len(attempts) >= 2 and attempts[-2]["status"] == "missing":
+            break
+        if attempt == 2:
+            if status == "missing":
+                status = "unstable"  # An ENOENT after I/O errors is not confirmed absence.
+            break
+        time.sleep(0.2 if status == "missing" else attempt + 1)
+    return dict(path=path, status=status, attempts=attempts)
+
+
+def check_input_storage():
+    with os.scandir(MINI_ROOT) as entries:
+        if next(entries, None) is None:
+            raise ValueError("mini storage is empty: {}".format(MINI_ROOT))
+
+
+def available_inputs(paths):
+    check_input_storage()
+    resolved, skipped = [], []
+    consecutive = 0
+    for index, (original, mini) in enumerate(zip(paths, resolve_inputs(paths))):
+        mini_check = probe_input(mini)
+        if mini_check["status"] == "ok":
+            resolved.append(mini)
+            consecutive = 0
+            continue
+        check_input_storage()
+        issue = dict(catalog_index=index, catalog_entry=original, observed_at=utc_now(),
+                     mini_check=mini_check)
+        if mini_check["status"] != "missing":
+            raise ValueError("mini input is not confirmed missing; no run staged: {}".format(
+                json.dumps(issue, sort_keys=True)))
+        resolved.append(None)
+        skipped.append(issue)
+        consecutive += 1
+        # Stop a suspected outage before recording a run full of false gaps.
+        if consecutive >= 3 or len(skipped) > max(3, len(paths) // 10):
+            raise ValueError("possible mini storage outage; no run staged: {}".format(
+                json.dumps(issue, sort_keys=True)))
+    if not any(resolved):
+        raise ValueError("no usable inputs; refusing to classify the entire run as gaps")
+    check_input_storage()
+    return resolved, skipped
+
+
+def gap_report(record):
+    return {key: record[key] for key in (
+        "catalog_sha256", "input_count", "processed_input_count", "skipped_input_count", "skipped_inputs")}
 
 
 def check_input_files(paths):
@@ -370,7 +469,8 @@ def inventory_records():
 
 
 def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
-                require_registered=True, ad_selection="off", input_source=DEFAULT_INPUT_SOURCE):
+                require_registered=True, ad_selection="off", input_source=DEFAULT_INPUT_SOURCE,
+                skip_missing_minis=False):
     selection = selection_record(ad_selection)
     catalog = os.path.normpath(catalog)
     if require_registered and not registered_catalog(period, hall, catalog):
@@ -386,6 +486,8 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
     catalog_data, catalog_source, catalog_backup = read_catalog_data(period, hall, catalog)
     catalog_sha = hashlib.sha256(catalog_data).hexdigest()
     catalog_paths = parse_catalog_inputs(catalog_data, catalog)
+    if skip_missing_minis and input_source != "mini":
+        raise ValueError("skipping missing minis requires mini-only inputs")
 
     run_dir = (Path(stage_root) / period / hall / stem).resolve()
     if run_dir.exists():
@@ -396,11 +498,16 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
                   input_source_mode(marker), marker.get("output_prefix"))
         if actual != expected:
             raise ValueError("existing run staging does not match requested catalog")
+        if marker.get("skip_missing_minis", False) != skip_missing_minis:
+            raise ValueError("existing run staging has a different gap policy")
         recorded_inputs(catalog_paths, marker)
         return marker
 
-    fallbacks = []
-    if input_source == "mini-or-recon":
+    fallbacks, skipped = [], []
+    if skip_missing_minis:
+        resolved, skipped = available_inputs(catalog_paths)
+        inputs = [path for path in resolved if path is not None]
+    elif input_source == "mini-or-recon":
         inputs = resolve_inputs(catalog_paths, "mini")
         for index, path in enumerate(inputs):
             try:
@@ -451,7 +558,7 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
             "catalog_source": catalog_source,
             "catalog_sha256": catalog_sha,
             "input_source": input_source,
-            "input_count": len(inputs),
+            "input_count": len(catalog_paths),
             "files_per_job": files_per_job,
             "chunk_count": len(chunks),
             "run_dir": str(run_dir),
@@ -463,6 +570,12 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
         if input_source == "mini-or-recon":
             marker["resolved_inputs"] = inputs
             marker["reconstruction_fallbacks"] = fallbacks
+        if skip_missing_minis:
+            marker.update(skip_missing_minis=True, resolved_inputs=resolved, processed_input_count=len(inputs),
+                          skipped_input_count=len(skipped), skipped_inputs=skipped)
+        if skipped:
+            atomic_json(temporary / "input-gaps.json", gap_report(marker))
+        recorded_inputs(catalog_paths, marker)
         atomic_json(temporary / "manifest.json", marker)
         atomic_json(temporary / MARKER_NAME, marker)
         os.rename(str(temporary), str(run_dir))
@@ -662,7 +775,7 @@ def aggregate_duration_reports(run_dir, marker, prefix):
             chunk_kept += kept
             chunk_entries += entries
         chunk_totals.append((chunk_kept, chunk_entries, len(expected_paths)))
-    if len(rows) != marker["input_count"]:
+    if len(rows) != marker.get("processed_input_count", marker["input_count"]):
         raise ValueError("source timing total does not match run input count")
     destination = run_dir / "durations.tsv"
     atomic_text(destination, "\t".join(DURATION_COLUMNS) + "\n" +
@@ -728,11 +841,17 @@ def finalize_run(run_dir, stage_root):
             zip(outputs, durations["chunk_totals"])))
 
     artifacts = outputs + [duration_file]
+    if marker.get("skipped_inputs"):
+        gaps = run_dir / "input-gaps.json"
+        if load_json(gaps) != gap_report(marker):
+            raise ValueError("gap report differs from the frozen run marker")
+        artifacts.append(gaps)
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(artifacts))) as executor:
         hashes = list(executor.map(sha256_file, artifacts))
     checksum_lines = ["{}  outputs/{}".format(digest, path.name)
                       for digest, path in zip(hashes, outputs)]
-    checksum_lines.append("{}  durations.tsv".format(hashes[-1]))
+    checksum_lines.extend("{}  {}".format(digest, path.name)
+                          for digest, path in zip(hashes[len(outputs):], artifacts[len(outputs):]))
     atomic_text(run_dir / "SHA256SUMS", "\n".join(checksum_lines) + "\n")
 
     reports = [parse_result_file(run_dir / "status" / "{:06d}.ok".format(index))
@@ -745,6 +864,7 @@ def finalize_run(run_dir, stage_root):
     result = dict(marker)
     result.update({
         "complete": True,
+        "catalog_complete": not marker.get("skipped_inputs"),
         "completed_at": utc_now(),
         "output_count": len(outputs),
         "output_bytes": sum(path.stat().st_size for path in outputs),
@@ -869,6 +989,11 @@ def verify_local_run(directory, root_verifier=None):
     if actual_outputs != expected_outputs:
         raise ValueError("local ROOT output set is incomplete or contains unexpected files")
     expected_artifacts = expected_outputs | {result["duration_file"]}
+    if result.get("skipped_inputs"):
+        if result.get("catalog_complete") is not False or load_json(
+                directory / "input-gaps.json") != gap_report(result):
+            raise ValueError("gap report or catalog completeness differs from run.json")
+        expected_artifacts.add("input-gaps.json")
     checksums = directory / result["checksums"]
     checked_bytes = 0
     checked_files = 0
@@ -917,6 +1042,10 @@ def verify_local_run(directory, root_verifier=None):
         "catalog_sha256": result["catalog_sha256"],
         "schema_version": result["schema_version"],
         "directory": str(directory),
+        "expected_inputs": len(catalog_paths),
+        "processed_inputs": duration_rows,
+        "skipped_inputs": len(result.get("skipped_inputs", [])),
+        "catalog_complete": not result.get("skipped_inputs"),
     }
 
 
@@ -928,7 +1057,7 @@ def catalog_signature(records):
         raise ValueError("invalid catalog inventory record: {}".format(error))
 
 
-def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOURCE):
+def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOURCE, skip_missing_minis=False):
     input_source_mode({"input_source": input_source})
     bad = [record for record in records if "error" in record]
     if bad:
@@ -941,20 +1070,48 @@ def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOUR
             raise ValueError("existing catalog inventory has the wrong kind or schema")
         if catalog_signature(previous.get("records", [])) != catalog_signature(records):
             raise ValueError("fixed catalog inventory differs from the existing local snapshot")
+        if previous.get("skip_missing_minis") and input_source != "mini":
+            raise ValueError("archive policy requires mini-only inputs for new work")
         if input_source_mode(previous) != input_source:
-            if input_source_mode(previous) != "mini" or input_source != "mini-or-recon":
+            if (skip_missing_minis and input_source == "mini" and
+                    input_source_mode(previous) == "mini-or-recon"):
+                legacy = {}
+                for record in records:
+                    relative = str(Path(record["period"]) / record["hall"] / record["stem"])
+                    result_path = Path(local_root) / relative / "run.json"
+                    if result_path.exists():
+                        result = load_json(result_path)
+                        if not result.get("complete") or result["catalog_sha256"] != record["catalog_sha256"]:
+                            raise ValueError("cannot retain an unfinalized or mismatched legacy run")
+                        if input_source_mode(result) not in ("mini", "mini-or-recon"):
+                            raise ValueError("unexpected legacy input source")
+                        legacy[relative] = input_source_mode(result)
+                previous["legacy_input_sources"] = legacy
+            elif input_source_mode(previous) != "mini" or input_source != "mini-or-recon":
                 raise ValueError("input source differs from the existing local snapshot")
-            previous.update(input_source=input_source, previous_input_source="mini", source_policy_updated_at=utc_now())
+            previous.update(previous_input_source=input_source_mode(previous), input_source=input_source,
+                            source_policy_updated_at=utc_now())
+            if skip_missing_minis:
+                previous["skip_missing_minis"] = True
             atomic_json(path, previous)
         return path
     atomic_json(path, {
         "kind": "dyb-preserve-catalog-inventory",
         "schema_version": SCHEMA_VERSION,
         "input_source": input_source,
+        "skip_missing_minis": skip_missing_minis,
         "created_at": utc_now(),
         "records": records,
     })
     return path
+
+
+def archive_input_sources(snapshot, relative):
+    legacy = snapshot.get("legacy_input_sources", {}).get(relative)
+    if legacy:
+        return {legacy}
+    policy = input_source_mode(snapshot)
+    return {"mini", "mini-or-recon"} if policy == "mini-or-recon" else {policy}
 
 
 def verify_all(local_root, root_verifier=None):
@@ -982,7 +1139,7 @@ def verify_all(local_root, root_verifier=None):
         raise ValueError("preservation set is incomplete: missing={} unexpected={} examples={}".format(
             len(missing), len(unexpected), (missing + unexpected)[:5]))
 
-    total_artifacts = total_bytes = total_inputs = total_entries = total_kept = 0
+    total_artifacts = total_bytes = total_inputs = total_entries = total_kept = total_skipped = 0
     modes = set()
     input_sources = set()
     for relative, record in sorted(expected.items()):
@@ -991,9 +1148,12 @@ def verify_all(local_root, root_verifier=None):
                 record["catalog_sha256"], record["input_count"]):
             raise ValueError("local run does not match inventory: {}".format(relative))
         verified = verify_local_run(actual[relative], root_verifier=root_verifier)
+        if verified["input_source"] not in archive_input_sources(snapshot, relative):
+            raise ValueError("archive input source differs from its catalog inventory snapshot")
         total_artifacts += verified["files"]
         total_bytes += verified["bytes"]
         total_inputs += verified["duration_rows"]
+        total_skipped += verified["skipped_inputs"]
         total_entries += verified["source_entries"]
         total_kept += verified["kept_entries"]
         modes.add(verified["ad_selection"])
@@ -1001,23 +1161,116 @@ def verify_all(local_root, root_verifier=None):
     if len(modes) != 1:
         raise ValueError("archive mixes AD selection modes: {}".format(sorted(modes)))
     policy = input_source_mode(snapshot)
-    if len(input_sources) != 1 and policy != "mini-or-recon":
-        raise ValueError("archive mixes input sources: {}".format(sorted(input_sources)))
-    allowed = {"mini", "mini-or-recon"} if policy == "mini-or-recon" else {policy}
-    if not input_sources <= allowed:
-        raise ValueError("archive input source differs from its catalog inventory snapshot")
     return {
-        "complete": True,
+        "complete": total_skipped == 0,
+        "accounted": True,
+        "status": "finished_with_gaps" if total_skipped else "complete",
         "runs": len(records),
         "inputs": total_inputs,
+        "expected_inputs": total_inputs + total_skipped,
+        "processed_inputs": total_inputs,
+        "skipped_inputs": total_skipped,
         "source_entries": total_entries,
         "kept_entries": total_kept,
         "ad_selection": modes.pop(),
         "input_source": policy,
+        "input_sources_present": sorted(input_sources),
         "artifacts": total_artifacts,
         "bytes": total_bytes,
         "local_root": str(local_root),
     }
+
+
+def archive_progress(local_root):
+    """Count finalized local runs; monitoring does not repeat large artifact hashes."""
+    local_root = Path(local_root)
+    snapshot = load_json(local_root / "catalog-inventory.json")
+    runs = []
+    for expected in snapshot["records"]:
+        directory = local_root / expected["period"] / expected["hall"] / expected["stem"]
+        if not (directory / "run.json").exists():
+            continue
+        record = load_json(directory / "run.json")
+        if (not record.get("complete") or (record["catalog_sha256"], record["input_count"]) !=
+                (expected["catalog_sha256"], expected["input_count"]) or
+                (directory / ".complete").read_text().strip() != record["catalog_sha256"]):
+            raise ValueError("local run does not match the expected completed catalog: {}".format(directory))
+        paths = parse_catalog_inputs((directory / "catalog.list").read_bytes(), str(directory))
+        if len(recorded_inputs(paths, record)) != record["duration_rows"]:
+            raise ValueError("processed input count differs from duration rows")
+        runs.append(record)
+    expected_inputs = sum(r["input_count"] for r in snapshot["records"])
+    processed = sum(r["duration_rows"] for r in runs)
+    skipped = sum(len(r.get("skipped_inputs", [])) for r in runs)
+    finished = len(runs) == len(snapshot["records"])
+    return dict(expected_runs=len(snapshot["records"]), expected_inputs=expected_inputs,
+                completed_runs=len(runs), processed_inputs=processed, skipped_inputs=skipped,
+                pending_inputs=expected_inputs - processed - skipped,
+                artifact_bytes=sum(r["artifact_bytes"] for r in runs), finished=finished,
+                status=("finished_with_gaps" if skipped else "complete") if finished else "in_progress",
+                complete=finished and not skipped), runs
+
+
+def refresh_input_issues(local_root, prepared=None):
+    local_root = Path(local_root)
+    progress, runs = archive_progress(local_root)
+    provenance = local_root.parent / "provenance"
+    provenance.mkdir(exist_ok=True)
+    path = provenance / "input-issues.json"
+    ledger = load_json(path) if path.exists() else {"kind": "dyb-input-issues"}
+    issues = {(i["period"], i["hall"], i["run"], i["catalog_index"]): i
+              for i in ledger.get("issues", [])}
+    for record in runs + ([prepared] if prepared else []):
+        finalized = record in runs
+        relative = Path(record["period"]) / record["hall"] / record["stem"]
+        catalog_file = (local_root / relative / "catalog.list" if finalized else
+                        CATALOG_BACKUP_ROOT / relative.with_suffix(".list"))
+        paths = parse_catalog_inputs(catalog_file.read_bytes(), str(catalog_file))
+        observations = [(item, "skipped" if finalized else "skip_recorded")
+                        for item in record.get("skipped_inputs", [])]
+        observations += [(item, "preserved_from_exact_recon" if finalized else "prepared_from_exact_recon")
+                         for item in record.get("reconstruction_fallbacks", [])]
+        for item, status in observations:
+            original = item.get("catalog_entry", item.get("recon"))
+            index = paths.index(original)
+            key = (record["period"], record["hall"], record["stem"], index)
+            new = dict(item, period=key[0], hall=key[1], run=key[2], catalog_index=index,
+                       catalog=record["catalog"], catalog_sha256=record["catalog_sha256"],
+                       catalog_path=original, status=status,
+                       observed_at=item.get("observed_at", record["created_at"]),
+                       evidence=str(Path("data") / relative / "run.json") if finalized else "frozen run preparation")
+            previous = issues.get(key)
+            if previous:
+                history = previous.get("previous_observations", [])
+                if (previous.get("status"), previous.get("observed_at")) != (status, new["observed_at"]):
+                    history = history + [{k: v for k, v in previous.items() if k != "previous_observations"}]
+                if history:
+                    new["previous_observations"] = history
+            issues[key] = new
+    ledger.update(report_version=2, updated_at=utc_now(), final=progress["finished"],
+                  current_input_policy="mini only; skip confirmed missing minis; stop on other errors",
+                  catalog_check_complete=progress["finished"], summary=progress,
+                  scope="Finalized local runs and recorded preparation observations; pending inputs are not assumed missing.",
+                  issues=[issues[key] for key in sorted(issues)])
+    ledger.pop("additional_check", None)
+    ledger.pop("completed_runs", None)
+    atomic_json(path, ledger)
+    gaps = [i for i in ledger["issues"] if i["status"] in ("skipped", "skip_recorded")]
+    text = ("# Unexpected input-file issues\n\nUpdated: {updated}\n\n"
+            "- Finalized runs: {completed_runs} / {expected_runs}\n"
+            "- Preserved inputs: {processed_inputs}; finalized gaps: {skipped_inputs}\n"
+            "- Pending inputs: {pending_inputs}; expected catalog inputs: {expected_inputs}\n"
+            "- Archive complete without gaps: {complete}; all runs finalized: {finished}\n\n"
+            "Counts use finalized local metadata; monitoring does not repeat artifact hashes.\n"
+            "New work uses minis only. Only confirmed missing minis are skipped; other errors stop the run.\n"
+            "The full expected catalog is unchanged. Exact paths, separate missing/I/O reasons,\n"
+            "retry timestamps, fallback observations and prior observations are in [input-issues.json](input-issues.json).\n"
+            "A finalized run may have recorded gaps; it does not make the archive complete.\n\n"
+            "## Recorded skips\n\n").format(updated=ledger["updated_at"], **progress)
+    text += "\n".join("- `{}` / catalog index {}: {}".format(
+        i["catalog_path"], i["catalog_index"], i["status"]) for i in gaps) + "\n"
+    atomic_text(provenance / "INPUT_ISSUES.md", text)
+    return progress
 
 
 def validate_local_mount(local_root, mount_root, mount_uuid=None):
@@ -1152,7 +1405,10 @@ def command_run(args):
         raise ValueError("remote deletion requires --confirm-remote-delete {}".format(
             DELETE_CONFIRMATION))
     local_root = validate_local_mount(args.local_root, args.mount_root, args.mount_uuid)
-    save_inventory_snapshot(local_root, records, args.input_source)
+    controller_lock = (local_root / ".controller.lock").open("a")
+    fcntl.flock(controller_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    snapshot = load_json(save_inventory_snapshot(local_root, records, args.input_source, args.skip_missing_minis))
+    refresh_input_issues(local_root)
 
     for index, record in enumerate(selected, 1):
         print("[{}/{}] {} {} {}".format(index, len(selected), record["period"],
@@ -1160,7 +1416,7 @@ def command_run(args):
         local_run = local_root / record["period"] / record["hall"] / record["stem"]
         if local_run.exists():
             existing = verify_local_run(local_run)
-            allowed = {"mini", "mini-or-recon"} if args.input_source == "mini-or-recon" else {args.input_source}
+            allowed = archive_input_sources(snapshot, str(local_run.relative_to(local_root)))
             if ((existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"]) !=
                     (record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection) or
                     existing["input_source"] not in allowed):
@@ -1174,7 +1430,13 @@ def command_run(args):
             "--ad-selection", args.ad_selection,
             "--input-source", args.input_source,
         ]
+        if args.skip_missing_minis:
+            prepare_args.append("--skip-missing-minis")
         marker, _ = remote_json(args.alias, args.remote_code_root, prepare_args)
+        refresh_input_issues(local_root, prepared=marker)
+        if marker.get("skipped_inputs"):
+            print("recorded gaps={} processed={} expected={}".format(
+                marker["skipped_input_count"], marker["processed_input_count"], marker["input_count"]), flush=True)
         if marker.get("reconstruction_fallbacks"):
             print("recorded exact original recon inputs for {} unavailable minis".format(
                 len(marker["reconstruction_fallbacks"])), flush=True)
@@ -1208,12 +1470,15 @@ def command_run(args):
         local_result = sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
         print("verified local files={} bytes={} path={}".format(
             local_result["files"], local_result["bytes"], local_result["directory"]), flush=True)
+        refresh_input_issues(local_root)
         if args.delete_remote_after_sync:
             deleted, _ = remote_json(args.alias, args.remote_code_root, [
                 "_cleanup", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
                 "--catalog-sha256", marker["catalog_sha256"],
             ])
             print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
+    print("campaign accounting: {}".format(json.dumps(refresh_input_issues(local_root))), flush=True)
+    controller_lock.close()
     return 0
 
 
@@ -1250,6 +1515,8 @@ def build_parser():
     run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,
                      help="mini (default): All-mini; recon: fixed originals; mini-or-recon: "
                           "explicitly record exact originals for unavailable minis")
+    run.add_argument("--skip-missing-minis", action="store_true",
+                     help="record and skip confirmed missing minis; stop on other errors or suspected outages")
     run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off",
                      help="on: keep AD entries above 0.6 MeV plus every other detector; "
                           "off (default): keep every entry (band counts are still recorded)")
@@ -1276,8 +1543,11 @@ def build_parser():
     verify_everything.add_argument("local_root")
     verify_everything.add_argument(
         "--root-verifier", help="optional slim-root binary for structural checks")
-    verify_everything.set_defaults(function=lambda args: print(json.dumps(verify_all(
-        args.local_root, root_verifier=args.root_verifier), sort_keys=True)) or 0)
+    def verify_all_function(args):
+        result = verify_all(args.local_root, root_verifier=args.root_verifier)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["complete"] else 2
+    verify_everything.set_defaults(function=verify_all_function)
 
     verify_backups = commands.add_parser(
         "verify-catalog-backups", help="verify the complete fixed run-catalog snapshot")
@@ -1296,9 +1566,11 @@ def build_parser():
     prepare.add_argument("--files-per-job", type=int, required=True)
     prepare.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off")
     prepare.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE)
+    prepare.add_argument("--skip-missing-minis", action="store_true")
     prepare.set_defaults(function=lambda args: print(json.dumps(prepare_run(
         args.catalog, args.period, args.hall, args.stage_root, args.code_root,
-        args.files_per_job, ad_selection=args.ad_selection, input_source=args.input_source))) or 0)
+        args.files_per_job, ad_selection=args.ad_selection, input_source=args.input_source,
+        skip_missing_minis=args.skip_missing_minis))) or 0)
 
     submit = commands.add_parser("_submit")
     submit.add_argument("--run-dir", required=True)

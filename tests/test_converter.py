@@ -233,11 +233,14 @@ class ConverterTests(unittest.TestCase):
         for source, mini in zip(self.sources, preserve.resolve_inputs(canonical)):
             Path(mini).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, mini)
+        canonical.append(canonical[-1].replace('_0002.root', '_0003.root'))
         catalog.write_text("\n".join(canonical) + "\n")
         marker = preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(PROJECT), 1,
-                                      require_registered=False)
+                                      require_registered=False, skip_missing_minis=True)
         run_dir = Path(marker["run_dir"])
         self.assertEqual(marker["input_source"], "mini")
+        self.assertEqual((marker['input_count'], marker['processed_input_count'],
+                          marker['skipped_input_count']), (3, 2, 1))
         for proc_id in range(marker["chunk_count"]):
             for _ in range(2):  # second pass must reopen, verify, and skip the finished chunk
                 subprocess.run(["bash", str(PROJECT / "scripts" / "worker.sh"), str(run_dir),
@@ -259,12 +262,24 @@ class ConverterTests(unittest.TestCase):
             "input_source": "mini",
             "records": [{
                 "period": "P17B", "hall": "EH1", "stem": "run7777", "catalog": str(catalog),
-                "catalog_sha256": marker["catalog_sha256"], "input_count": 2,
+                "catalog_sha256": marker["catalog_sha256"], "input_count": 3,
             }],
         }))
         everything = preserve.verify_all(stage, root_verifier=CONVERTER)
         self.assertEqual((everything["runs"], everything["kept_entries"], everything["ad_selection"]),
                          (1, expected_kept, "off"))
+        self.assertEqual((everything['complete'], everything['accounted'], everything['expected_inputs'],
+                          everything['processed_inputs'], everything['skipped_inputs']), (False, True, 3, 2, 1))
+        with mock.patch('sys.stdout'):
+            self.assertEqual(preserve.main(['verify-all', str(stage)]), 2)
+        progress = preserve.refresh_input_issues(stage)
+        self.assertEqual((progress['finished'], progress['complete'], progress['skipped_inputs']), (True, False, 1))
+        gaps = run_dir / 'input-gaps.json'
+        original_gaps = gaps.read_text()
+        gaps.write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'gap report'):
+            preserve.verify_local_run(run_dir)
+        gaps.write_text(original_gaps)
 
         run_json = run_dir / "run.json"
         original = run_json.read_text()

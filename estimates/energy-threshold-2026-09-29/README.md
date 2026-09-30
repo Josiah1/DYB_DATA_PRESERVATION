@@ -56,9 +56,9 @@ This is a **raw-energy-selected archive**. TWin applies corrections before
 its 0.7-MeV normal or 0.3-MeV `--acpo` cuts. Those physics selections are not
 proved equivalent to this preservation cut; discarded individual AD events
 cannot be reconstructed from the aggregate counts. The campaign also does
-not establish availability of every expected input. Production records an
-exact-original fallback for unavailable minis; if both copies are unreadable,
-their run stops without excluding the file.
+not establish availability of every expected input. The current campaign uses
+minis only and records confirmed missing minis as gaps. Earlier original-file
+fallbacks remain truthfully recorded in the already verified output.
 
 ## Recheck
 

@@ -21,7 +21,7 @@ budget that reserves 10% of the disk's 14.00 TB free space.
 - Data: `/media/josiah/LAYJ萤捷1/DYB_DATA_PRESERVATION/data`.
 - Code and staging: `/scratchfs2/dyw/lijj16/DYB_DATA_PRESERVATION/{code,staging}` on `dayabay1`.
 - Format: `dyb-slim-v5`, metadata schema 4, `adFrom0p3To0p6MeV` count band.
-- Checks: `make test`; all 13 tests passed on IHEP, including both ROOT tests.
+- Checks: `make test`; all 15 tests passed on IHEP, including both ROOT tests and gap reconciliation.
 - Catalog inventory: 4,009 catalogs, 831,334 source files, no catalog failures.
 
 The one-run pilot **P17B/EH1/run21221** (HepJob **81751470**) passed: 217 mini
@@ -31,13 +31,33 @@ hashes passed on the destination disk before the generated remote staging
 was removed. This verified run remains in the archive and is skipped on resume.
 See [pilot.json](estimates/energy-threshold-2026-09-29/pilot.json).
 
-The next run, P17B/EH1/run21228, has an unavailable mini for file 0200.
+The earlier run P17B/EH1/run21228 had an unavailable mini for file 0200.
 Its exact original passed a full read of all 19 required branches across
 755,835 entries; [fallback-input-check.json](estimates/energy-threshold-2026-09-29/fallback-input-check.json)
-records the branch signatures. The launcher explicitly uses `mini-or-recon`
-to retain every catalog file: unavailable minis use only their matching
-originals, with the choice and reason frozen in `run.json`. The original
-catalog, ordering, reconstruction version, and selected branch format stay fixed.
+records the branch signatures. That historical original-file fallback stays
+truthfully recorded in the verified output. It is not the policy for new work.
+
+The user's September 29 correction requires **minis only** for all new work.
+The launcher now passes `--input-source mini --skip-missing-minis`. It reads
+no originals. Confirmed missing minis are recorded and skipped individually;
+I/O errors are retried twice (1 and 2 seconds), while unresolved I/O, permission,
+invalid-header or suspected storage-outage errors stop processing. Missing-file
+confirmation requires two consecutive ENOENT results, 0.2 seconds apart.
+Three consecutive missing files or more than `max(3, input_count // 10)` gaps
+stops preparation for inspection, without freezing a run full of suspected gaps.
+
+At the correction, 11 runs / 2,763 sources / 34.24 GB had been verified.
+Run21540 has 126 expected minis: files 0103 and 0159 are missing; 124 minis
+remain usable in the live check. Existing outputs are reverified and retained.
+The full expected catalog remains 4,009 runs / 831,334 inputs.
+
+Each gapped run has a checksummed `input-gaps.json`; processed and skipped
+counts must reconcile to its full catalog. The controller updates
+`provenance/input-issues.json` and `INPUT_ISSUES.md` before submission and after
+verified transfer. Historical fallback observations retain their actual source.
+Final accounting distinguishes `finished_with_gaps` from `complete`; `verify-all`
+exits 2 for a valid archive with recorded gaps. `.complete` and the run's
+`complete` field describe finalization, not absence of catalog gaps.
 
 `scripts/run_campaign.sh` locates this UUID, explicitly enables the selected
 cut, and supplies the already-authorized execution and verified-staging
@@ -68,8 +88,28 @@ Read progress with `systemctl --user status dyb-preservation.service`
 and `tail -n 30 build/campaign.log`. The command inhibits sleep while running.
 After a failure, inspect the log and fix its cause before restarting. An
 unmounted/replaced disk, unreadable input, failed chunk, or checksum mismatch
-stops the controller. This sample-based capacity estimate does not establish
+stops the controller except for explicitly recorded missing minis. A disk-held
+advisory lock rejects a second controller. This sample-based capacity estimate does not establish
 archive-wide input availability or lossless TWin physics equivalence.
+
+Install the persistent five-minute progress/error check after committing and
+pushing the verified code:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/dyb-preservation-check.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now dyb-preservation-check.timer
+systemctl --user start dyb-preservation-check.service
+```
+
+It checks the disk UUID, controller state and finalized local metadata; it does
+not repeat multi-terabyte hashes. `build/campaign-status.json` and the disk's
+`provenance/progress.json` show the latest observation. GNOME desktop notices
+report hourly progress, stopped controllers, failed checks, and an hour without
+new verified output; critical alerts repeat every 30 minutes while unresolved.
+The monitor never starts a second controller or changes data. Inspect failures
+with `journalctl --user -u dyb-preservation-check.service` and `build/campaign.log`.
 
 Schema-3 / 0.7-MeV archives require the previous toolchain at `5479aef`;
 start new staging and a new destination for schema 4. Do not relabel old counts.
@@ -126,17 +166,15 @@ defaults to `--input-source mini`, using `/lustrefs/juno26/dyw/rec/All-mini`
 with the exact run/file/version identities from those catalogs. New-run
 preparation opens every mapped source and checks its four-byte ROOT signature
 before staging. Unavailable inputs stop strict `mini` mode. The campaign's
-explicit `mini-or-recon` mode tries the exact original for each unavailable
-mini and records `resolved_inputs` and `reconstruction_fallbacks` in the run
-metadata. If both copies fail, the run stops; no file is skipped.
+explicit `--skip-missing-minis` flag permits only confirmed missing minis to
+be skipped, with recorded gaps and the full expected catalog retained.
 The September 2 mini index leaves 4,087 required paths unlisted;
 see `estimates/mini-branches-2026-09-27/`. A dry run does not open source files.
 
-For an explicit original-reconstruction campaign, use `--input-source recon`.
-The archive snapshot and run metadata pin the choice. The only allowed policy
-change is an explicit `mini` to `mini-or-recon` upgrade with the same catalog
-snapshot; completed mini runs remain valid and retain their original metadata.
-Other source changes are refused. Older schema-3
+The archive snapshot and run metadata pin the choice. The current explicit
+transition from `mini-or-recon` to `mini` retains only already finalized runs
+as named legacy exceptions; later original-file fallbacks are refused.
+Older schema-3
 archives require the previous toolchain at `5479aef`. Deploy the updated
 `preserve.py` before using the new default on the cluster.
 

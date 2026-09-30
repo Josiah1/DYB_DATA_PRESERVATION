@@ -1,0 +1,7 @@
+[Unit]
+Description=Check DYB preservation progress and report failures
+
+[Service]
+Type=oneshot
+ExecStart=%h/TOOLs/install/python-current/bin/python3 %h/WORK/Science/Dayabay-work/DYB_DATA_PRESERVATION/scripts/check_campaign.py
+TimeoutStartSec=120

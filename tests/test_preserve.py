@@ -1,4 +1,5 @@
 import hashlib
+import errno
 import json
 from pathlib import Path
 import tempfile
@@ -9,6 +10,65 @@ import preserve
 
 
 class PreserveTests(unittest.TestCase):
+    def test_missing_minis_are_gaps_but_io_permissions_and_outages_stop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical = ["/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021540/"
+                         "recon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._{:04d}.root".format(i)
+                         for i in range(1, 6)]
+            catalog = root / "run21540.list"
+            catalog.write_text("\n".join(canonical) + "\n")
+            with mock.patch.object(preserve, "MINI_ROOT", str(root / "mini")):
+                minis = preserve.resolve_inputs(canonical)
+                for path in minis:
+                    Path(path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(path).write_bytes(b"root synthetic")
+                Path(minis[1]).unlink()
+                real_open = open
+
+                def mini_only(path, *args, **kwargs):
+                    self.assertFalse(str(path).startswith('/dybfs/'), "must never open an original")
+                    return real_open(path, *args, **kwargs)
+
+                with mock.patch('builtins.open', side_effect=mini_only) as opened:
+                    marker = preserve.prepare_run(str(catalog), "P17B", "EH1", str(root / "stage"),
+                                                  str(root / "code"), 2, require_registered=False,
+                                                  skip_missing_minis=True)
+                self.assertEqual((marker['input_count'], marker['processed_input_count'],
+                                  marker['skipped_input_count']), (5, 4, 1))
+                self.assertEqual(preserve.recorded_inputs(canonical, marker), [minis[0]] + minis[2:])
+                self.assertEqual(marker['skipped_inputs'][0]['mini_check']['attempts'][-1]['errno'], errno.ENOENT)
+                self.assertEqual(Path(marker['run_dir'], 'catalog.list').read_bytes(), catalog.read_bytes())
+                changed = dict(marker, resolved_inputs=list(marker['resolved_inputs']))
+                changed['resolved_inputs'][0] = canonical[0]
+                with self.assertRaisesRegex(ValueError, 'exact mini/recon identities'):
+                    preserve.recorded_inputs(canonical, changed)
+                changed = dict(marker, skipped_inputs=[])
+                with self.assertRaises(ValueError):
+                    preserve.recorded_inputs(canonical, changed)
+                with mock.patch('builtins.open', side_effect=[OSError(errno.EIO, 'transient'),
+                                OSError(errno.EIO, 'transient'), real_open(minis[0], 'rb')]), \
+                        mock.patch('preserve.time.sleep') as sleep:
+                    check = preserve.probe_input(minis[0])
+                self.assertEqual([a['status'] for a in check['attempts']], ['io_error', 'io_error', 'ok'])
+                self.assertEqual(sleep.call_count, 2)
+                with mock.patch('builtins.open', side_effect=OSError(errno.EIO, 'I/O error')), \
+                        mock.patch('preserve.time.sleep'):
+                    with self.assertRaisesRegex(ValueError, 'not confirmed missing'):
+                        preserve.available_inputs(canonical)
+                with mock.patch('builtins.open', side_effect=PermissionError(errno.EACCES, 'permission')):
+                    with self.assertRaises(PermissionError):
+                        preserve.available_inputs(canonical)
+                Path(minis[0]).write_bytes(b'bad header')
+                with self.assertRaisesRegex(ValueError, 'not confirmed missing'):
+                    preserve.available_inputs(canonical)
+                for path in minis:
+                    Path(path).unlink(missing_ok=True)
+                with mock.patch('builtins.open', side_effect=mini_only) as opened:
+                    with self.assertRaisesRegex(ValueError, 'possible mini storage outage'):
+                        preserve.available_inputs(canonical)
+                self.assertEqual(opened.call_count, 6)
+
     def test_exact_original_fallback_is_explicit_and_frozen_on_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -251,6 +311,15 @@ class PreserveTests(unittest.TestCase):
             result.update(input_source="mini-or-recon", resolved_inputs=[mini_path])
             preserve.atomic_json(run_dir / "run.json", result)
             self.assertEqual(preserve.verify_all(archive)["input_source"], "mini-or-recon")
+            before = (run_dir / 'run.json').read_bytes()
+            preserve.save_inventory_snapshot(archive, snapshot['records'], 'mini', skip_missing_minis=True)
+            self.assertEqual((run_dir / 'run.json').read_bytes(), before)
+            updated = preserve.load_json(archive / 'catalog-inventory.json')
+            self.assertEqual(preserve.archive_input_sources(updated, 'P17B/EH1/chunk'), {'mini-or-recon'})
+            self.assertEqual(preserve.archive_input_sources(updated, 'P17B/EH1/newrun'), {'mini'})
+            self.assertEqual(preserve.verify_all(archive)['input_sources_present'], ['mini-or-recon'])
+            with self.assertRaisesRegex(ValueError, 'mini-only'):
+                preserve.save_inventory_snapshot(archive, snapshot['records'], 'mini-or-recon')
             result["resolved_inputs"] = ["/wrong/source.root"]
             preserve.atomic_json(run_dir / "run.json", result)
             with self.assertRaisesRegex(ValueError, "exact mini/recon identities"):

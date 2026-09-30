@@ -50,15 +50,29 @@ Run, stream (Neutrino/NoTag), hall, version and file number are unchanged.
 `catalog.list` and its checksum retain the original catalog; chunk lists and
 timing/provenance paths identify the actual inputs.
 
-Use `--input-source recon` for the original files. The single-disk launcher
-uses `--input-source mini-or-recon`: when a mini cannot be opened or has an
-invalid ROOT header, preparation checks that file's exact original catalog
-path. The resolved paths and fallback reasons are frozen in run metadata;
-resume and verification use those recorded paths. There is no version
-substitution or file exclusion. If neither copy passes, the run stops.
-Plain `mini` and `recon` modes remain strict. An explicit switch from `mini`
-to `mini-or-recon` preserves already verified mini runs and records the
-policy change in the archive snapshot.
+The current single-disk launcher uses **`--input-source mini --skip-missing-minis`**.
+It never opens original reconstruction files. Two consecutive missing-file
+results permit an individual skip, recorded with its exact catalog index,
+identity, mini path, timestamps and reason. I/O errors get up to three attempts;
+unresolved I/O, permission and invalid-header errors stop the run. An inaccessible
+or empty mini root, three consecutive missing minis, or more than 10% missing
+(with a floor of three) stops preparation as a suspected storage outage.
+
+The complete catalog stays unchanged. `input_count` is the expected count;
+`processed_input_count + skipped_input_count` must equal it. `resolved_inputs`
+stays aligned with the catalog, with `null` only for explicitly recorded gaps.
+The SHA-256-protected `input-gaps.json` is required for every run with gaps.
+`durations.tsv` lists only processed inputs, in catalog order; its `fileIndex`
+is the dense processed index, while gap records use the original `catalog_index`.
+The run's `complete` marker means finalization succeeded; `catalog_complete`
+is false if any input was skipped.
+
+Earlier verified runs, including original-file fallbacks, keep their source
+metadata and output bytes. The policy transition pins those existing run names
+and source modes in `catalog-inventory.json`; new runs must be mini-derived.
+The automatically updated `provenance/input-issues.json` and `INPUT_ISSUES.md`
+retain missing-mini records and historical fallback observations. The approximate
+0.5% from an earlier inventory is not used as a target or forced missing count.
 Schema-3 archives use the previous toolchain at commit `5479aef`; schema 4
 records the new 0.6-MeV count band and refuses to mix with that older format.
 
@@ -69,8 +83,7 @@ in all 19 required branches and no missing, added or reordered events.
 This includes all three files in the flasher canvas and the three earlier
 pilot samples; it is not an archive-wide equivalence check. The September 2 archive index
 lists 827,247 of 831,334 required files, leaving 4,087 unlisted; this is not a
-fresh all-file availability check. The campaign checks each run before staging
-and stops if both copies of a required input are unavailable.
+fresh all-file availability check. The campaign checks each run's minis before staging.
 A [flasher-variable canvas](plots/residual_flasher/README.md)
 records a separate three-file diagnostic sample.
 These findings apply to the current named `All-mini` samples, not to older
@@ -191,7 +204,9 @@ python3 preserve.py verify-local /mounted/archive/P17B/EH1/RUN_STEM
 After all runs are copied, check the complete archive against the saved fixed
 inventory, rehash every artifact, check every run's selection mode and entry
 totals against its timing table, and refuse an archive that mixes selection
-modes or violates its recorded input-source policy:
+modes or violates its recorded input-source policy. A reconciled archive with
+gaps reports `complete: false`, `accounted: true`, `status: finished_with_gaps`
+and exits with status 2. Missing runs or invalid artifacts still fail:
 
 ```bash
 python3 preserve.py verify-all /mounted/archive
