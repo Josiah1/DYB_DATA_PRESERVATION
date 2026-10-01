@@ -36,6 +36,8 @@ class PipelineTests(unittest.TestCase):
         with mock.patch('preserve.run_command', return_value=quota), \
                 mock.patch('preserve.shutil.disk_usage', return_value=mock.Mock(free=1000 * preserve.GIB)):
             self.assertEqual(preserve.scratch_quota('/scratchfs2/stage')['limit_bytes'], 500 * preserve.GIB)
+            quota.stdout = quota.stdout.replace('/scratchfs2 ', '/scratchfs2/long/staging/path\n   ')
+            self.assertEqual(preserve.scratch_quota('/scratchfs2/long/staging/path')['limit_bytes'], 500 * preserve.GIB)
 
     def test_submission_intent_recovery_and_no_duplicate_or_cap_overshoot(self):
         with tempfile.TemporaryDirectory() as temporary:

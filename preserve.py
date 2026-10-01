@@ -629,7 +629,12 @@ def queue_counts(jobs):
 
 def scratch_quota(stage_root):
     result = run_command(["/usr/bin/lfs", "quota", "-u", str(os.getuid()), stage_root])
-    rows = [line.split() for line in result.stdout.splitlines() if line.strip().startswith("/")]
+    rows = []
+    for line in result.stdout.splitlines():
+        if line.strip().startswith("/"):
+            rows.append(line.split())
+        elif rows and len(rows[-1]) == 1 and line.strip():
+            rows[-1].extend(line.split())  # lfs wraps long paths onto a separate line.
     if len(rows) != 1 or len(rows[0]) != 9:
         raise ValueError("cannot read scratch quota: " + result.stdout)
     row = rows[0]
