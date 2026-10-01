@@ -45,6 +45,13 @@ Prior published runs are checked against archive metadata on resume; full artifa
 rehashing remains available through `verify-all`. Any staged copy left after a
 restart must still pass local artifact hashes before cleanup.
 
+Read-only `_pool` snapshot failures retry twice, after 1 and 2 seconds, logging
+each failure with its timestamp. Persistent failure stops the controller without
+using stale status or replaying a submission/cleanup. Command failures preserve
+both stdout and stderr. If a transfer finishes while the controller is stopping,
+its verified local metadata is reconciled into the input ledger; staging remains
+for verification and cleanup on resume.
+
 Mini-only input handling, the immutable catalog, truthful legacy fallback
 metadata, the 0.6-MeV AD cut, all non-AD events, ROOT compression and disk UUID
 remain unchanged. The archive remains in progress with explicitly recorded gaps.
@@ -152,6 +159,9 @@ not repeat multi-terabyte hashes. `build/campaign-status.json` and the disk's
 `provenance/progress.json` show the latest observation. GNOME desktop notices
 report hourly progress, stopped controllers, failed checks, and an hour without
 new verified output; critical alerts repeat every 30 minutes while unresolved.
+Desktop notification delivery is bounded to ten seconds. Delivery failure is
+recorded separately as `notification_error` in both reports and the journal;
+the original campaign alert is retained, and the next timer check retries delivery.
 The monitor never starts a second controller or changes data. Inspect failures
 with `journalctl --user -u dyb-preservation-check.service` and `build/campaign.log`.
 

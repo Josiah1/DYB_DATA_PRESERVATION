@@ -608,7 +608,8 @@ def scheduler_jobs(stage_root):
         "ClusterId,ProcId,JobStatus,RequestCpus,Cmd,Iwd,HoldReason",
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
     if result.returncode or result.stderr.strip():
-        raise RuntimeError("scheduler query failed: " + result.stderr)
+        raise RuntimeError("scheduler query failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
+            result.returncode, result.stdout, result.stderr))
     # HTCondor emits nothing for an empty global queue, and may emit one array per schedd.
     pending, jobs = result.stdout.lstrip(), []
     while pending:
@@ -1048,7 +1049,7 @@ def run_command(command, check=True, cwd=None):
     result = subprocess.run(command, cwd=cwd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, universal_newlines=True)
     if check and result.returncode != 0:
-        raise RuntimeError("command failed ({}):\n{}\n{}".format(
+        raise RuntimeError("command failed ({}):\n{}\nstdout:\n{}\nstderr:\n{}".format(
             result.returncode, " ".join(command), result.stdout, result.stderr))
     return result
 
@@ -1064,11 +1065,22 @@ def remote_call(alias, code_root, arguments, check=True):
 
 
 def remote_json(alias, code_root, arguments, check=True):
-    result = remote_call(alias, code_root, arguments, check=check)
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
-    if not lines:
-        raise RuntimeError("remote command returned no JSON: {}".format(result.stderr))
-    return json.loads(lines[-1]), result.returncode
+    # Only this read-only snapshot is safe to replay; never retry a submission or cleanup here.
+    attempts = 3 if arguments[0] == "_pool" and check else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            result = remote_call(alias, code_root, arguments, check=check)
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
+            if not lines:
+                raise RuntimeError("remote command returned no JSON: {}".format(result.stderr))
+            return json.loads(lines[-1]), result.returncode
+        except (RuntimeError, json.JSONDecodeError) as error:
+            if attempts > 1:
+                print("{} _pool attempt {}/{} failed: {}".format(
+                    utc_now(), attempt, attempts, error), file=sys.stderr, flush=True)
+            if attempt == attempts:
+                raise
+            time.sleep(attempt)
 
 
 def deployed_inventory(alias, code_root):
@@ -1587,11 +1599,11 @@ def run_pipeline(args, selected, snapshot, local_root):
                     print("verified local files={} bytes={} path={}".format(
                         result["files"], result["bytes"], result["directory"]), flush=True)
                     validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                    refresh_input_issues(local_root)
                     if args.delete_remote_after_sync:
                         deleted = call("_cleanup", transferring, ["--catalog-sha256", transferring["catalog_sha256"]])
                         print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
                     done.add(relative(transferring))
-                    refresh_input_issues(local_root)
                     transfer, transferring = None, None
 
                 pool = call("_pool")
@@ -1697,6 +1709,15 @@ def run_pipeline(args, selected, snapshot, local_root):
         except BaseException as error:
             report.update(checked_at=utc_now(), heartbeat_time=time.time(), error=str(error))
             atomic_json(state_path, report)
+            if transfer is not None:
+                try:
+                    # The executor already waits on exit. Account for a published copy, retaining staging.
+                    transfer.result()
+                    validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                    refresh_input_issues(local_root)
+                except Exception as transfer_error:
+                    report["transfer_error"] = str(transfer_error)
+                    atomic_json(state_path, report)
             raise
 
 

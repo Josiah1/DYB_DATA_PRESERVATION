@@ -87,12 +87,20 @@ def main():
                 queue.get("running"), queue.get("idle"), report["controller"]["max_jobs"])
         title = "DYB preservation needs attention" if alert else (
             "DYB finished with gaps" if report.get("finished") and not report.get("complete") else "DYB preservation progress")
-        subprocess.run(["notify-send", "--app-name=DYB preservation", "--urgency=" + ("critical" if alert else "normal"),
-                        "--expire-time=" + ("0" if alert else "10000"), title, body], check=True)
-        report["last_notice_time"] = now
+        try:
+            subprocess.run(["notify-send", "--app-name=DYB preservation", "--urgency=" + ("critical" if alert else "normal"),
+                            "--expire-time=" + ("0" if alert else "10000"), title, body], check=True, timeout=10)
+            report["last_notice_time"] = now
+        except (OSError, subprocess.SubprocessError) as error:
+            report["notification_error"] = str(error)
+        if archive:
+            try:
+                preserve.atomic_json(archive / "provenance/progress.json", report)
+            except OSError as error:
+                report["alert"] = "Cannot save progress on destination disk: " + str(error)
         preserve.atomic_json(state_path, report)
     print(json.dumps({key: value for key, value in report.items() if key != "log_tail"}, sort_keys=True))
-    return 1 if alert else 0
+    return 1 if report.get("alert") or report.get("notification_error") else 0
 
 
 if __name__ == "__main__":

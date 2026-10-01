@@ -1,6 +1,7 @@
 import copy
 import json
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import unittest
@@ -10,6 +11,27 @@ import preserve
 
 
 class PipelineTests(unittest.TestCase):
+    def test_command_diagnostics_and_bounded_read_only_status_retries(self):
+        with self.assertRaises(RuntimeError) as error:
+            preserve.run_command([sys.executable, '-c',
+                                  'import sys; print("partial output"); sys.stderr.write("quota unavailable"); sys.exit(7)'])
+        self.assertIn('command failed (7)', str(error.exception))
+        self.assertIn('partial output', str(error.exception))
+        self.assertIn('stderr:\nquota unavailable', str(error.exception))
+        good = mock.Mock(returncode=0, stdout='{"queue": {"outstanding": 0}}', stderr='')
+        bad_json = mock.Mock(returncode=0, stdout='interrupted JSON', stderr='')
+        with mock.patch('preserve.remote_call', side_effect=[RuntimeError('temporary status failure'), bad_json, good]) as call, \
+                mock.patch('preserve.time.sleep') as sleep:
+            result, status = preserve.remote_json('host', '/code', ['_pool'])
+        self.assertEqual((result['queue']['outstanding'], status, call.call_count), (0, 0, 3))
+        self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
+        for command, attempts in [('_pool', 3), ('_submit', 1), ('_prepare', 1), ('_cleanup', 1)]:
+            with mock.patch('preserve.remote_call', side_effect=RuntimeError('persistent failure')) as call, \
+                    mock.patch('preserve.time.sleep'):
+                with self.assertRaisesRegex(RuntimeError, 'persistent failure'):
+                    preserve.remote_json('host', '/code', [command])
+            self.assertEqual(call.call_count, attempts, 'mutations must never be replayed automatically')
+
     def test_completed_arrays_reserve_actual_bytes_only_after_jobs_exit(self):
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary) / 'staging'
@@ -182,6 +204,43 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(cleaned, [])
             self.assertIn(marker['run_dir'], staged)
             self.assertIn('checksum mismatch', preserve.load_json(root / 'provenance/controller.json')['error'])
+
+            # A fatal status query may overlap a successful copy. Publish its ledger, but retain staging.
+            copying, status_failed = threading.Event(), threading.Event()
+            verified.discard(marker['run_dir'])
+            queries = [0]
+
+            def failing_remote(alias, code, arguments):
+                if arguments[0] == '_pool':
+                    queries[0] += 1
+                    if queries[0] == 2:
+                        self.assertTrue(copying.wait(2))
+                        status_failed.set()
+                        raise RuntimeError('read-only status failed')
+                return remote(alias, code, arguments)
+
+            def finishing_copy(*unused):
+                copying.set()
+                self.assertTrue(status_failed.wait(2))
+                verified.add(marker['run_dir'])
+                return dict(files=1, bytes=10, directory=marker['run_dir'])
+
+            def reconcile(*unused, **kwargs):
+                if not kwargs:
+                    self.assertIn(marker['run_dir'], verified)
+
+            with mock.patch('preserve.remote_json', side_effect=failing_remote), \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                    mock.patch('preserve.recorded_inputs'), \
+                    mock.patch('preserve.refresh_input_issues', side_effect=reconcile) as ledger, \
+                    mock.patch('preserve.validate_local_mount'), \
+                    mock.patch('preserve.sync_run', side_effect=finishing_copy):
+                with self.assertRaisesRegex(RuntimeError, 'read-only status failed'):
+                    preserve.run_pipeline(args, records[:1], {}, local)
+            ledger.assert_called_with(local)
+            self.assertEqual(cleaned, [])
+            self.assertIn(marker['run_dir'], staged)
+            self.assertIn('read-only status failed', preserve.load_json(root / 'provenance/controller.json')['error'])
 
 
 if __name__ == '__main__':
