@@ -28,6 +28,12 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'scheduler query failed'):
                 preserve.scheduler_jobs('/stage')
         response.stderr = ''
+        response.stdout = '\n'
+        with mock.patch('preserve.subprocess.run', return_value=response):
+            self.assertEqual(preserve.scheduler_jobs('/stage'), [])
+        response.stdout = '[{"Cmd":"/stage/run/array-job.sh","JobStatus":1,"RequestCpus":1}]\n[]\n'
+        with mock.patch('preserve.subprocess.run', return_value=response):
+            self.assertEqual(preserve.queue_counts(preserve.scheduler_jobs('/stage'))['idle'], 1)
         response.stdout = json.dumps([dict(Cmd='/stage/run/array-job.sh', JobStatus=2, RequestCpus=4)])
         with mock.patch('preserve.subprocess.run', return_value=response):
             with self.assertRaisesRegex(ValueError, 'CPU request'):

@@ -609,9 +609,14 @@ def scheduler_jobs(stage_root):
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
     if result.returncode or result.stderr.strip():
         raise RuntimeError("scheduler query failed: " + result.stderr)
-    jobs = json.loads(result.stdout)
-    if not isinstance(jobs, list):
-        raise ValueError("invalid scheduler response")
+    # HTCondor emits nothing for an empty global queue, and may emit one array per schedd.
+    pending, jobs = result.stdout.lstrip(), []
+    while pending:
+        rows, end = json.JSONDecoder().raw_decode(pending)
+        if not isinstance(rows, list):
+            raise ValueError("invalid scheduler response")
+        jobs.extend(rows)
+        pending = pending[end:].lstrip()
     prefix = str(Path(stage_root)) + "/"
     jobs = [job for job in jobs if job.get("Cmd", "").startswith(prefix)]
     for job in jobs:
