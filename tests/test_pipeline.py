@@ -10,6 +10,23 @@ import preserve
 
 
 class PipelineTests(unittest.TestCase):
+    def test_completed_arrays_reserve_actual_bytes_only_after_jobs_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / 'P17B/EH1/run12345'
+            (run / 'outputs').mkdir(parents=True)
+            (run / 'outputs/chunk.root').write_bytes(b'root')
+            preserve.atomic_json(run / preserve.MARKER_NAME,
+                                 dict(kind='dyb-preserve-run', run_dir=str(run), chunk_count=16))
+            with mock.patch('preserve.scheduler_jobs', return_value=[]) as jobs, \
+                    mock.patch('preserve.scratch_quota', return_value={}), \
+                    mock.patch('preserve.run_status', return_value=dict(state='RUNNING', running=1)) as status:
+                self.assertEqual(preserve.pool_status(temporary)['reserved_bytes'], 16 * preserve.GIB)
+                status.return_value = dict(state='COMPLETE', running=0)
+                jobs.return_value = [dict(Iwd=str(run), JobStatus=2, RequestCpus=1)]
+                self.assertEqual(preserve.pool_status(temporary)['reserved_bytes'], 16 * preserve.GIB)
+                jobs.return_value = []
+                self.assertEqual(preserve.pool_status(temporary)['reserved_bytes'], 4 + 16 * 1024 ** 2)
+
     def test_admission_quota_and_scheduler_fail_closed(self):
         pool = dict(queue=dict(outstanding=284), reserved_bytes=284 * preserve.GIB,
                     output_bytes=20 * preserve.GIB,

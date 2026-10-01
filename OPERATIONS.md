@@ -18,9 +18,11 @@ Retries wait until the old array has left the scheduler. Held or failed jobs
 stop new work and remain available for diagnosis.
 
 The staging admission budget is **400 GiB**, reserving a conservative 1 GiB per
-chunk until its run has been verified on disk and removed from scratch. This is
-a reservation estimate, not a truncation limit; larger observed outputs count
-at their actual size. Live Lustre byte/file quota checks retain 30 GiB of extra
+chunk while an array is unfinished. Once all chunks are complete and every job
+has exited the scheduler, that run reserves its actual output size plus 1 MiB
+per chunk for metadata until verified cleanup. This is a reservation estimate,
+not a truncation limit; larger observed outputs count at their actual size.
+Live Lustre byte/file quota checks retain 30 GiB of extra
 headroom, and destination free space also gates new runs. Completed runs count
 against the budget, so a slow disk or network applies backpressure. One background
 transfer performs ROOT validation, checksum generation, resumable copying and

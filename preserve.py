@@ -668,11 +668,16 @@ def pool_status(stage_root):
                 output_bytes += output.stat().st_size
             except FileNotFoundError:
                 pass
-        runs.append(dict(marker=marker, status=run_status(directory, stage_root),
+        status = run_status(directory, stage_root)
+        drained = (status["state"] == "COMPLETE" and not status["running"] and
+                   not any(j["Iwd"] == str(directory) for j in jobs))
+        reserve = (output_bytes + marker["chunk_count"] * 1024 ** 2 if drained else
+                   max(output_bytes, marker["chunk_count"] * CHUNK_RESERVE_BYTES))
+        runs.append(dict(marker=marker, status=status,
                          submissions=load_json(submissions) if submissions.exists() else [],
                          intent=(directory / "submission-intent.json").exists(),
                          output_bytes=output_bytes,
-                         reserved_bytes=max(output_bytes, marker["chunk_count"] * CHUNK_RESERVE_BYTES)))
+                         reserved_bytes=reserve))
     return dict(checked_at=utc_now(), jobs=jobs, queue=queue_counts(jobs), runs=runs,
                 reserved_bytes=sum(r["reserved_bytes"] for r in runs),
                 output_bytes=sum(r["output_bytes"] for r in runs), quota=scratch_quota(stage_root))
