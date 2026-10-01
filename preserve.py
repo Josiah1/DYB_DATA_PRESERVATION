@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-run-at-a-time preservation pipeline for the fixed Daya Bay catalogs."""
+"""Bounded preservation pipeline for the fixed Daya Bay catalogs."""
 
 import argparse
 import concurrent.futures
@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import pwd
 from pathlib import Path
 import re
 import shlex
@@ -36,6 +37,10 @@ DEFAULT_ALIAS = "dayabay1"
 DEFAULT_CODE_ROOT = "/dybfs2/users/lijj16/DYB_DATA_PRESERVATION/code"
 DEFAULT_STAGE_ROOT = "/dybfs2/users/lijj16/DYB_DATA_PRESERVATION/staging"
 DEFAULT_LCG_VIEW = "/cvmfs/sft.cern.ch/lcg/views/LCG_110/x86_64-el9-gcc13-opt"
+GIB = 1024 ** 3
+# Conservative admission reservation, not an output-size prediction or truncation limit.
+CHUNK_RESERVE_BYTES = GIB
+SCRATCH_HEADROOM_BYTES = 30 * GIB
 CATALOG_BACKUP_ROOT = Path(__file__).resolve().parent / "catalog_backups"
 CATALOG_BACKUP_SUMS = CATALOG_BACKUP_ROOT / "SHA256SUMS"
 EXPECTED_CATALOG_BACKUPS = 4009
@@ -597,22 +602,133 @@ def load_run(run_dir, stage_root):
     return run_dir, marker
 
 
-def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False):
+def scheduler_jobs(stage_root):
+    result = subprocess.run([
+        "condor_q", "-global", pwd.getpwuid(os.getuid()).pw_name, "-json", "-attributes",
+        "ClusterId,ProcId,JobStatus,RequestCpus,Cmd,Iwd,HoldReason",
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+    if result.returncode or result.stderr.strip():
+        raise RuntimeError("scheduler query failed: " + result.stderr)
+    jobs = json.loads(result.stdout)
+    if not isinstance(jobs, list):
+        raise ValueError("invalid scheduler response")
+    prefix = str(Path(stage_root)) + "/"
+    jobs = [job for job in jobs if job.get("Cmd", "").startswith(prefix)]
+    for job in jobs:
+        if job["RequestCpus"] != 1 or job["JobStatus"] not in range(1, 8):
+            raise ValueError("unexpected campaign CPU request or scheduler state: {}".format(job))
+    return jobs
+
+
+def queue_counts(jobs):
+    return dict(outstanding=len(jobs), running=sum(j["JobStatus"] == 2 for j in jobs),
+                idle=sum(j["JobStatus"] == 1 for j in jobs),
+                held=sum(j["JobStatus"] == 5 for j in jobs),
+                running_cpus=sum(j["RequestCpus"] for j in jobs if j["JobStatus"] == 2))
+
+
+def scratch_quota(stage_root):
+    result = run_command(["/usr/bin/lfs", "quota", "-u", str(os.getuid()), stage_root])
+    rows = [line.split() for line in result.stdout.splitlines() if line.strip().startswith("/")]
+    if len(rows) != 1 or len(rows[0]) != 9:
+        raise ValueError("cannot read scratch quota: " + result.stdout)
+    row = rows[0]
+    used, soft, hard = [int(value.rstrip("*")) * 1024 for value in row[1:4]]
+    files, file_soft, file_hard = [int(value.rstrip("*")) for value in row[5:8]]
+    limits = [n for n in (soft, hard) if n]
+    file_limits = [n for n in (file_soft, file_hard) if n]
+    if not limits or not file_limits:
+        raise ValueError("scratch quota must have explicit byte and file limits")
+    return dict(used_bytes=used, limit_bytes=min(limits), used_files=files,
+                limit_files=min(file_limits),
+                free_bytes=min(min(limits) - used, shutil.disk_usage(stage_root).free))
+
+
+def pool_status(stage_root):
+    stage_root = validate_remote_path(stage_root, "stage root")
+    jobs = scheduler_jobs(stage_root)
+    runs = []
+    for path in sorted(Path(stage_root).glob("*/*/*/" + MARKER_NAME)):
+        directory, marker = load_run(path.parent, stage_root)
+        submissions = directory / "submissions.json"
+        # Workers rename their partial output atomically; disappearance during this size scan is normal.
+        output_bytes = 0
+        for output in (directory / "outputs").iterdir():
+            try:
+                output_bytes += output.stat().st_size
+            except FileNotFoundError:
+                pass
+        runs.append(dict(marker=marker, status=run_status(directory, stage_root),
+                         submissions=load_json(submissions) if submissions.exists() else [],
+                         intent=(directory / "submission-intent.json").exists(),
+                         output_bytes=output_bytes,
+                         reserved_bytes=max(output_bytes, marker["chunk_count"] * CHUNK_RESERVE_BYTES)))
+    return dict(checked_at=utc_now(), jobs=jobs, queue=queue_counts(jobs), runs=runs,
+                reserved_bytes=sum(r["reserved_bytes"] for r in runs),
+                output_bytes=sum(r["output_bytes"] for r in runs), quota=scratch_quota(stage_root))
+
+
+def admission_reason(pool, chunks, max_jobs, stage_bytes, local_free):
+    reserve = chunks * CHUNK_RESERVE_BYTES
+    if pool["queue"]["outstanding"] + chunks > max_jobs:
+        return "job cap"
+    if pool["reserved_bytes"] + reserve > stage_bytes:
+        return "staging reservation budget"
+    future_bytes = max(0, pool["reserved_bytes"] - pool["output_bytes"]) + reserve
+    if future_bytes + SCRATCH_HEADROOM_BYTES > pool["quota"]["free_bytes"]:
+        return "scratch quota headroom"
+    if pool["quota"]["used_files"] + 16 * chunks + 1000 >= pool["quota"]["limit_files"]:
+        return "scratch file quota"
+    if (pool["reserved_bytes"] + reserve) * 1.05 > local_free:
+        return "destination free space"
+    return None
+
+
+def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False, max_jobs=300):
     run_dir, marker = load_run(run_dir, stage_root)
+    # Remote lock also protects against two simultaneous submission helpers after an SSH interruption.
+    with (Path(stage_root) / ".submission.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs)
+
+
+def submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs):
     submissions_path = run_dir / "submissions.json"
     submissions = load_json(submissions_path) if submissions_path.exists() else []
+    intent_path = run_dir / "submission-intent.json"
+    jobs = scheduler_jobs(stage_root)
+    own = [j for j in jobs if j["Cmd"] == str(run_dir / "array-job.sh")]
+    if intent_path.exists():
+        intent = load_json(intent_path)
+        clusters = {j["ClusterId"] for j in own}
+        if len(clusters) != 1:
+            raise RuntimeError("ambiguous submission; inspect scheduler before retrying: {}".format(intent_path))
+        submission = dict(intent, cluster_id=clusters.pop(), recovered_at=utc_now())
+        if not any(s["cluster_id"] == submission["cluster_id"] for s in submissions):
+            submissions.append(submission)
+            atomic_json(submissions_path, submissions)
+        intent_path.unlink()
+        return submission
     if submissions and not resubmit:
         return submissions[-1]
+    if own:
+        raise RuntimeError("refusing duplicate submission while this run has queued jobs")
+    if not 1 <= max_jobs <= 300 or len(jobs) + marker["chunk_count"] > max_jobs:
+        raise RuntimeError("submission would exceed the campaign job cap")
     if resubmit:
         for path in (run_dir / "status").glob("*.fail"):
+            path.unlink()
+        for path in (run_dir / "status").glob("*.running"):
             path.unlink()
     hepjob_bin = "/afs/ihep.ac.cn/soft/common/sysgroup/hep_job/bin"
     command = [
         os.path.join(hepjob_bin, "hep_sub"), "-g", group, "-wt", walltime,
-        "-os", "AlmaLinux9",
+        "-os", "AlmaLinux9", "-cpu", "1",
         "-mem", str(memory_mb), str(run_dir / "array-job.sh"),
         "-argu", "%{ProcId}", "-n", str(marker["chunk_count"]),
     ]
+    intent = dict(submitted_at=utc_now(), chunk_count=marker["chunk_count"], command=command)
+    atomic_json(intent_path, intent)
     result = subprocess.run(command, cwd=str(run_dir), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, universal_newlines=True)
     if result.returncode != 0:
@@ -629,6 +745,7 @@ def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False):
     }
     submissions.append(submission)
     atomic_json(submissions_path, submissions)
+    intent_path.unlink()
     return submission
 
 
@@ -1395,8 +1512,10 @@ def command_run(args):
     if args.confirm_start != START_CONFIRMATION:
         raise ValueError("production execution requires --confirm-start {}".format(START_CONFIRMATION))
     if min(args.files_per_job, args.memory_mb, args.max_attempts,
-           args.run_timeout, args.poll_seconds) <= 0:
+           args.run_timeout, args.poll_seconds, args.max_staged_gib) <= 0:
         raise ValueError("job sizing, attempts, timeout, and polling values must be positive")
+    if not 1 <= args.max_jobs <= 300:
+        raise ValueError("--max-jobs must be between 1 and 300")
     if not selected:
         raise ValueError("no runs selected")
     if len(selected) > 1 and not args.delete_remote_after_sync:
@@ -1410,76 +1529,160 @@ def command_run(args):
     snapshot = load_json(save_inventory_snapshot(local_root, records, args.input_source, args.skip_missing_minis))
     refresh_input_issues(local_root)
 
-    for index, record in enumerate(selected, 1):
-        print("[{}/{}] {} {} {}".format(index, len(selected), record["period"],
-                                         record["hall"], record["stem"]), flush=True)
-        local_run = local_root / record["period"] / record["hall"] / record["stem"]
-        if local_run.exists():
-            existing = verify_local_run(local_run)
-            allowed = archive_input_sources(snapshot, str(local_run.relative_to(local_root)))
-            if ((existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"]) !=
-                    (record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection) or
-                    existing["input_source"] not in allowed):
-                raise ValueError("existing local run does not match the fixed catalog/schema/selection/input source")
-            print("already verified locally; skipping cluster processing", flush=True)
-            continue
-        prepare_args = [
-            "_prepare", "--catalog", record["catalog"], "--period", record["period"],
-            "--hall", record["hall"], "--stage-root", args.remote_stage_root,
-            "--code-root", args.remote_code_root, "--files-per-job", str(args.files_per_job),
-            "--ad-selection", args.ad_selection,
-            "--input-source", args.input_source,
-        ]
-        if args.skip_missing_minis:
-            prepare_args.append("--skip-missing-minis")
-        marker, _ = remote_json(args.alias, args.remote_code_root, prepare_args)
-        refresh_input_issues(local_root, prepared=marker)
-        if marker.get("skipped_inputs"):
-            print("recorded gaps={} processed={} expected={}".format(
-                marker["skipped_input_count"], marker["processed_input_count"], marker["input_count"]), flush=True)
-        if marker.get("reconstruction_fallbacks"):
-            print("recorded exact original recon inputs for {} unavailable minis".format(
-                len(marker["reconstruction_fallbacks"])), flush=True)
-        status, _ = remote_json(args.alias, args.remote_code_root, [
-            "_status", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-        ])
-        attempt = 0
-        while status["state"] != "COMPLETE" and attempt < args.max_attempts:
-            submit_args = [
-                "_submit", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-                "--group", args.group, "--walltime", args.walltime,
-                "--memory-mb", str(args.memory_mb),
-            ]
-            if attempt > 0 or status["state"] == "FAILED":
-                submit_args.append("--resubmit")
-            submission, _ = remote_json(args.alias, args.remote_code_root, submit_args)
-            print("submitted cluster {} attempt {}".format(submission["cluster_id"], attempt + 1),
-                  flush=True)
-            wait_args = [
-                "_wait", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-                "--timeout", str(args.run_timeout), "--poll-seconds", str(args.poll_seconds),
-            ]
-            status, _ = remote_json(args.alias, args.remote_code_root, wait_args, check=False)
-            attempt += 1
-        if status["state"] != "COMPLETE":
-            raise RuntimeError("run failed after {} attempts: {}".format(attempt, status))
-
-        result, _ = remote_json(args.alias, args.remote_code_root, [
-            "_finalize", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-        ])
-        local_result = sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
-        print("verified local files={} bytes={} path={}".format(
-            local_result["files"], local_result["bytes"], local_result["directory"]), flush=True)
-        refresh_input_issues(local_root)
-        if args.delete_remote_after_sync:
-            deleted, _ = remote_json(args.alias, args.remote_code_root, [
-                "_cleanup", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-                "--catalog-sha256", marker["catalog_sha256"],
-            ])
-            print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
+    run_pipeline(args, selected, snapshot, local_root)
     print("campaign accounting: {}".format(json.dumps(refresh_input_issues(local_root))), flush=True)
     controller_lock.close()
     return 0
+
+
+def run_pipeline(args, selected, snapshot, local_root):
+    def relative(record):
+        return "/".join(record[key] for key in ("period", "hall", "stem"))
+
+    def call(command, marker=None, extra=()):
+        options = [command, "--stage-root", args.remote_stage_root]
+        if marker:
+            options += ["--run-dir", marker["run_dir"]]
+        return remote_json(args.alias, args.remote_code_root, options + list(extra))[0]
+
+    def transfer_run(marker):
+        result = call("_finalize", marker)
+        return sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
+
+    expected = {relative(r): r for r in selected}
+    _, finalized = archive_progress(local_root)
+    done = set()
+    for record in finalized:
+        key = relative(record)
+        if (record["schema_version"] != SCHEMA_VERSION or selection_mode(record["selection"]) != args.ad_selection or
+                input_source_mode(record) not in archive_input_sources(snapshot, key)):
+            raise ValueError("existing local run has a different schema/selection/input source: " + key)
+        done.add(key)
+    # Previously published runs passed hashes before rename. Rehash on cleanup recovery, or via verify-all.
+    state_path = local_root.parent / "provenance/controller.json"
+    transfer, transferring = None, None
+    observed = set()
+    report = dict(max_jobs=args.max_jobs, max_staged_bytes=args.max_staged_gib * GIB)
+    # ponytail: one transfer thread bounds disk/network load; increase only after measured transfer saturation.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            while True:
+                if transfer is not None and transfer.done():
+                    result = transfer.result()  # Any verification/copy failure prevents deletion and further submission.
+                    print("verified local files={} bytes={} path={}".format(
+                        result["files"], result["bytes"], result["directory"]), flush=True)
+                    validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                    if args.delete_remote_after_sync:
+                        deleted = call("_cleanup", transferring, ["--catalog-sha256", transferring["catalog_sha256"]])
+                        print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
+                    done.add(relative(transferring))
+                    refresh_input_issues(local_root)
+                    transfer, transferring = None, None
+
+                pool = call("_pool")
+                if pool["queue"]["outstanding"] > args.max_jobs:
+                    raise RuntimeError("existing scheduler jobs exceed configured cap; no new jobs submitted")
+                if pool["queue"]["held"]:
+                    raise RuntimeError("held campaign jobs: {}".format([j for j in pool["jobs"] if j["JobStatus"] == 5]))
+                active = {}
+                for run in pool["runs"]:
+                    marker = run["marker"]
+                    key = relative(marker)
+                    record = expected.get(key)
+                    if (record is None or marker["catalog_sha256"] != record["catalog_sha256"] or
+                            marker["input_count"] != record["input_count"] or
+                            marker["files_per_job"] != args.files_per_job or
+                            marker["code_root"] != args.remote_code_root or
+                            selection_mode(marker["selection"]) != args.ad_selection or
+                            input_source_mode(marker) != args.input_source or
+                            marker.get("skip_missing_minis", False) != args.skip_missing_minis):
+                        raise ValueError("staged run differs from requested fixed campaign: " + key)
+                    if key not in observed:
+                        paths = parse_catalog_inputs((CATALOG_BACKUP_ROOT / (key + ".list")).read_bytes(), key)
+                        recorded_inputs(paths, marker)
+                        refresh_input_issues(local_root, prepared=marker)
+                        print("adopted {} chunks={} gaps={}".format(key, marker["chunk_count"],
+                              len(marker.get("skipped_inputs", []))), flush=True)
+                        observed.add(key)
+                    if key not in done or args.delete_remote_after_sync:
+                        active[key] = run
+                directories = {r["marker"]["run_dir"] for r in pool["runs"]}
+                if any(j["Iwd"] not in directories for j in pool["jobs"]):
+                    raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
+
+                pending = [r for key, r in expected.items() if key not in done and key not in active]
+                report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
+                              quota=pool["quota"], reserved_bytes=pool["reserved_bytes"],
+                              output_bytes=pool["output_bytes"], staged_runs=len(active),
+                              ready_runs=sum(r["status"]["state"] == "COMPLETE" for r in active.values()),
+                              transferring=relative(transferring) if transferring else None,
+                              pending_runs=len(pending), backpressure=None, error=None)
+                atomic_json(state_path, report)
+                if not active and not pending:
+                    break
+
+                submitted = False
+                for key, run in active.items():
+                    marker, status = run["marker"], run["status"]
+                    own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                    if status["state"] == "COMPLETE" and not own and not status["running"]:
+                        if transfer is None:
+                            transferring = marker
+                            transfer = executor.submit(transfer_run, marker)
+                        continue
+                    if run["submissions"]:
+                        elapsed = time.time() - dt.datetime.fromisoformat(run["submissions"][-1]["submitted_at"]).timestamp()
+                        if elapsed > args.run_timeout:
+                            raise RuntimeError("run exceeded wait timeout; jobs retained: " + key)
+                    retry = status["state"] == "FAILED" and not own
+                    if retry and len(run["submissions"]) >= args.max_attempts:
+                        raise RuntimeError("run exhausted submission attempts: " + key)
+                    if run["intent"] or not run["submissions"] or retry:
+                        if pool["queue"]["outstanding"] + marker["chunk_count"] > args.max_jobs:
+                            continue
+                        reason = admission_reason(pool, 0, args.max_jobs, args.max_staged_gib * GIB,
+                                                  shutil.disk_usage(local_root).free)
+                        if reason:
+                            report["backpressure"] = reason
+                            continue
+                        extra = ["--group", args.group, "--walltime", args.walltime,
+                                 "--memory-mb", str(args.memory_mb), "--max-jobs", str(args.max_jobs)]
+                        if retry:
+                            extra.append("--resubmit")
+                        submission = call("_submit", marker, extra)
+                        print("submitted/adopted {} cluster {}".format(key, submission["cluster_id"]), flush=True)
+                        submitted = True
+                        break  # Refresh real queue counts before another submission.
+                if submitted:
+                    continue
+                if any(r["status"]["failed"] for r in active.values()):
+                    raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
+                if report["backpressure"] and not pool["jobs"] and transfer is None:
+                    raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
+                if pending:
+                    record = pending[0]
+                    chunks = math.ceil(record["input_count"] / args.files_per_job)
+                    reason = admission_reason(pool, chunks, args.max_jobs, args.max_staged_gib * GIB,
+                                              shutil.disk_usage(local_root).free)
+                    report["backpressure"] = reason
+                    if not reason:
+                        validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                        options = ["--catalog", record["catalog"], "--period", record["period"],
+                                   "--hall", record["hall"], "--code-root", args.remote_code_root,
+                                   "--files-per-job", str(args.files_per_job), "--ad-selection", args.ad_selection,
+                                   "--input-source", args.input_source]
+                        if args.skip_missing_minis:
+                            options.append("--skip-missing-minis")
+                        call("_prepare", extra=options)
+                        continue
+                    if not active:
+                        raise RuntimeError("cannot admit next run: " + reason)
+                atomic_json(state_path, report)
+                time.sleep(args.poll_seconds)
+        except BaseException as error:
+            report.update(checked_at=utc_now(), heartbeat_time=time.time(), error=str(error))
+            atomic_json(state_path, report)
+            raise
 
 
 def add_connection_options(parser):
@@ -1501,7 +1704,7 @@ def build_parser():
     inventory.add_argument("--json", action="store_true")
     inventory.set_defaults(function=command_inventory)
 
-    run = commands.add_parser("run", help="process, sync, verify, and optionally clean one run at a time")
+    run = commands.add_parser("run", help="process concurrent runs with bounded jobs and staging")
     add_connection_options(run)
     run.add_argument("--remote-stage-root", default=DEFAULT_STAGE_ROOT)
     run.add_argument("--local-root", required=True)
@@ -1526,6 +1729,8 @@ def build_parser():
     run.add_argument("--max-attempts", type=int, default=2)
     run.add_argument("--run-timeout", type=int, default=7200)
     run.add_argument("--poll-seconds", type=int, default=15)
+    run.add_argument("--max-jobs", type=int, default=300, help="cap all outstanding compression jobs (1-300)")
+    run.add_argument("--max-staged-gib", type=int, default=400, help="staging admission budget; reserve 1 GiB per chunk")
     run.add_argument("--execute", action="store_true")
     run.add_argument("--confirm-start")
     run.add_argument("--delete-remote-after-sync", action="store_true")
@@ -1579,9 +1784,14 @@ def build_parser():
     submit.add_argument("--walltime", required=True)
     submit.add_argument("--memory-mb", type=int, required=True)
     submit.add_argument("--resubmit", action="store_true")
+    submit.add_argument("--max-jobs", type=int, default=300)
     submit.set_defaults(function=lambda args: print(json.dumps(submit_run(
         args.run_dir, args.stage_root, args.group, args.walltime, args.memory_mb,
-        args.resubmit))) or 0)
+        args.resubmit, args.max_jobs))) or 0)
+
+    pool = commands.add_parser("_pool")
+    pool.add_argument("--stage-root", required=True)
+    pool.set_defaults(function=lambda args: print(json.dumps(pool_status(args.stage_root))) or 0)
 
     status = commands.add_parser("_status")
     status.add_argument("--run-dir", required=True)
@@ -1627,7 +1837,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         return args.function(args)
-    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, subprocess.TimeoutExpired) as error:
         print("ERROR: {}".format(error), file=sys.stderr)
         return 1
 

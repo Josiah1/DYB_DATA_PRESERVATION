@@ -2,7 +2,7 @@
 
 This repository is the complete, restartable toolchain for preserving the
 inputs used by the current IBD/accidental, fast-neutron/muon-x, and Li9/He8
-analyses. It processes one run at a time, copies that run to a mounted local
+analyses. It processes runs concurrently within a 300-job cap, copies each run to a mounted local
 disk, verifies it, and only then permits deletion of that run's cluster
 staging area.
 

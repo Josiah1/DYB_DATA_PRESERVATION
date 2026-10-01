@@ -5,6 +5,48 @@ cleanup, and final completeness verification. Nothing in the preparation or
 benchmark performed on 2026-08-28 submitted a HepJob task or deleted cluster
 data.
 
+## Concurrent campaign, 2026-10-01 UTC
+
+The Ubuntu launcher targets up to **300 outstanding single-core compression
+jobs**, spanning multiple runs. `--max-jobs` cannot exceed 300; each HepJob
+submission explicitly requests `-cpu 1`. Actual running/idle/held counts come
+from `condor_q -global` across the IHEP schedulers. Query failures stop admission.
+Existing arrays are adopted from their frozen markers and submission receipts.
+An interrupted submission leaves an intent record: a uniquely matching queued
+cluster can be adopted; an ambiguous result stops for inspection, never blind resubmission.
+Retries wait until the old array has left the scheduler. Held or failed jobs
+stop new work and remain available for diagnosis.
+
+The staging admission budget is **400 GiB**, reserving a conservative 1 GiB per
+chunk until its run has been verified on disk and removed from scratch. This is
+a reservation estimate, not a truncation limit; larger observed outputs count
+at their actual size. Live Lustre byte/file quota checks retain 30 GiB of extra
+headroom, and destination free space also gates new runs. Completed runs count
+against the budget, so a slow disk or network applies backpressure. One background
+transfer performs ROOT validation, checksum generation, resumable copying and
+local checksum verification while the controller fills available job slots.
+Only the controller deletes verified staging, under the existing single-controller lock.
+
+The live capacity check found a 500 GiB soft / about 507.8 GiB hard scratch quota
+and 200,000 files. Schedd per-owner limits were 100,000–500,000 jobs and per-submit
+limits 30,000. The unchanged short-job class has a 30-minute walltime and maps
+to `COMMON.short.dyw`, whose configured share was 100 slots (parent
+`COMMON.short`: 120). A 300-job queue does not guarantee 300 running jobs;
+IHEP allocation/fair-share and staging/transfer backpressure remain authoritative.
+No scheduler priority, group or walltime limit is bypassed.
+
+The five-minute monitor includes live controller queue counts, staging reservations,
+quota, transfer activity and backpressure from `provenance/controller.json`.
+It alerts on a heartbeat older than five minutes, held jobs, controller errors,
+cap/budget violations, stopped service, or an hour without new verified output.
+Prior published runs are checked against archive metadata on resume; full artifact
+rehashing remains available through `verify-all`. Any staged copy left after a
+restart must still pass local artifact hashes before cleanup.
+
+Mini-only input handling, the immutable catalog, truthful legacy fallback
+metadata, the 0.6-MeV AD cut, all non-AD events, ROOT compression and disk UUID
+remain unchanged. The archive remains in progress with explicitly recorded gaps.
+
 ## Single-disk campaign, 2026-09-29
 
 The threshold grid uses **0.1-MeV steps**. The completed 0.3–0.7-MeV

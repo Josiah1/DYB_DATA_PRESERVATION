@@ -13,7 +13,7 @@ import preserve
 DISK_UUID = "2A4F48F8BDFEE355"
 
 
-def status_record(progress, service, previous, now):
+def status_record(progress, service, previous, now, controller=None):
     changed = (progress.get("artifact_bytes") != previous.get("artifact_bytes") or
                service.get("InvocationID") != previous.get("service", {}).get("InvocationID"))
     last_progress = now if changed else previous.get("last_progress_time", now)
@@ -23,8 +23,19 @@ def status_record(progress, service, previous, now):
         alert = "Controller is {} (exit {})".format(service.get("ActiveState"), service.get("ExecMainStatus"))
     elif not progress["finished"] and now - last_progress >= 3600:
         alert = "No new verified output for one hour; inspect the controller and jobs"
+    if not alert and not progress["finished"] and controller is not None:
+        if controller.get("error"):
+            alert = "Controller error: " + controller["error"]
+        elif now - controller.get("heartbeat_time", 0) > 300:
+            alert = "Controller/scheduler heartbeat is more than five minutes old"
+        elif controller.get("queue", {}).get("held"):
+            alert = "Compression jobs are held by the scheduler"
+        elif controller.get("queue", {}).get("outstanding", 0) > controller["max_jobs"]:
+            alert = "Compression job cap exceeded"
+        elif controller.get("reserved_bytes", 0) > controller["max_staged_bytes"]:
+            alert = "Staging reservation budget exceeded; inspect storage"
     return dict(progress, service=service, checked_at=preserve.utc_now(),
-                last_progress_time=last_progress, alert=alert, metadata_summary_only=True)
+                last_progress_time=last_progress, alert=alert, controller=controller, metadata_summary_only=True)
 
 
 def main():
@@ -46,7 +57,8 @@ def main():
                                           "-p", "ActiveState", "-p", "SubState", "-p", "ExecMainStatus",
                                           "-p", "MainPID", "-p", "InvocationID"], text=True)
         service = dict(line.split("=", 1) for line in output.splitlines())
-        report = status_record(progress, service, previous, now)
+        controller = preserve.load_json(archive / "provenance/controller.json")
+        report = status_record(progress, service, previous, now, controller)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         report = dict(checked_at=preserve.utc_now(), alert="Campaign check failed: " + str(error))
     log = PROJECT / "build/campaign.log"
@@ -69,6 +81,10 @@ def main():
     if notice:
         body = alert or "{} runs verified; {} inputs preserved; {} missing minis skipped; {} inputs pending".format(
             report["completed_runs"], report["processed_inputs"], report["skipped_inputs"], report["pending_inputs"])
+        if not alert and report.get("controller"):
+            queue = report["controller"].get("queue", {})
+            body += "; jobs running={} idle={} / cap={}".format(
+                queue.get("running"), queue.get("idle"), report["controller"]["max_jobs"])
         title = "DYB preservation needs attention" if alert else (
             "DYB finished with gaps" if report.get("finished") and not report.get("complete") else "DYB preservation progress")
         subprocess.run(["notify-send", "--app-name=DYB preservation", "--urgency=" + ("critical" if alert else "normal"),
