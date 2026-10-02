@@ -56,6 +56,48 @@ Mini-only input handling, the immutable catalog, truthful legacy fallback
 metadata, the 0.6-MeV AD cut, all non-AD events, ROOT compression and disk UUID
 remain unchanged. The archive remains in progress with explicitly recorded gaps.
 
+## NTFS3 crash and transfer recovery, 2026-10-02
+
+The run37945 rsync exit 12 on October 1 at 08:59 EDT was caused by a **local
+NTFS3 kernel BUG**, not established evidence of an IHEP network fault. The
+08:58:49 kernel trace names `rsync`, `iomap_write_end`, and `ntfs_file_write_iter`
+on kernel `7.0.0-31-generic`. The signature matches
+[upstream inline-data alignment bug 221446](https://github.com/torvalds/linux/commit/70d3855594cf6e8791970714b65cac3202d6160e).
+Normal unmount blocked in `ntfs_evict_inode` waiting on a folio lock. Do not
+force/lazy-unmount, unplug, remount the still-busy block device, or retry writes.
+Stop campaign/checker writes and reboot Ubuntu normally before changing drivers.
+This dual-boot machine defaults to Windows: select Ubuntu for the next boot
+and verify the remote-access user service and user lingering first.
+
+Use the installed **ntfs-3g** driver for this archive (reported by `findmnt` as
+`fuseblk`), retaining UUID `2A4F48F8BDFEE355` and the existing mount path. Check
+the unmounted volume with `ntfsfix --no-action`; this is a limited read-only
+check, not Windows `chkdsk`. Refuse a dirty/inconsistent volume that cannot be
+mounted without recovery; never clear flags or force a mount to resume. The
+controller and checker now reject NTFS3 and read-only destinations before
+creating archive files. Existing verified output and `.incoming` data stay intact.
+
+For transport failures on a validated destination, rsync retains `--partial`,
+has a 120-second inactivity timeout, and retries at most twice after 5 and 15
+seconds. Socket/timeouts and explicit disconnect diagnostics are eligible;
+permission, file I/O, space, vanished-source, and host-key failures stop.
+Mount UUID, driver, writable mode and free space are rechecked before every
+attempt. Every successful transfer still passes full checksums/accounting before
+publication and remote cleanup. Retries never resubmit compression jobs or add
+missing-mini ledger entries.
+
+`scripts/dyb-preservation.service` provides the same single controller as a
+persistent user unit (no automatic restart on errors). The one-shot
+`scripts/recover_campaign_disk.sh OLD_BOOT_ID BASELINE_RUNS LAST_VERIFIED_RUN`
+is for a root service after the required reboot. It refuses the old boot or
+an existing mount, performs the read-only filesystem check, mounts with
+ntfs-3g and `norecover`, rechecks the saved-run baseline and hashes the last
+verified run, then starts the user controller and timer. It waits up to 20
+minutes for a new verified save and reconciled ledger, rechecks that save's
+hashes and the live scheduler/budget, and writes
+`build/reboot-recovery-result.json`. A failure leaves an explicit journal
+error; it never forces the filesystem, clears flags or starts another controller.
+
 ## Single-disk campaign, 2026-09-29
 
 The threshold grid uses **0.1-MeV steps**. The completed 0.3–0.7-MeV

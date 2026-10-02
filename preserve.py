@@ -1422,9 +1422,15 @@ def validate_local_mount(local_root, mount_root, mount_uuid=None):
     if not mount_root.exists() or not os.path.ismount(str(mount_root)):
         raise ValueError("required local disk is not mounted at {}".format(mount_root))
     if mount_uuid:
-        actual = run_command(["findmnt", "-n", "-o", "UUID", "--target", str(mount_root)]).stdout.strip()
+        actual, filesystem, options = run_command([
+            "findmnt", "-n", "-o", "UUID,FSTYPE,OPTIONS", "--target", str(mount_root)
+        ]).stdout.split()
         if actual != mount_uuid:
             raise ValueError("mounted disk UUID {} differs from required {}".format(actual, mount_uuid))
+        if filesystem == "ntfs3":
+            raise ValueError("unsafe NTFS3 destination: iomap_write_end kernel crashes; use ntfs-3g")
+        if "rw" not in options.split(","):
+            raise ValueError("destination filesystem is not mounted read-write")
     local_root = Path(local_root).resolve()
     try:
         local_root.relative_to(mount_root)
@@ -1448,16 +1454,34 @@ def sync_run(alias, remote_result, local_root, mount_root, mount_uuid=None):
     final.parent.mkdir(parents=True, exist_ok=True)
     incoming = final.with_name(".{}.incoming".format(final.name))
     incoming.mkdir(exist_ok=True)
-    free = shutil.disk_usage(str(local_root)).free
     required = int(remote_result["artifact_bytes"] * 1.05)
-    if free < required:
-        raise ValueError("local disk has {} bytes free; {} required".format(free, required))
     ssh_transport = "ssh " + " ".join(SSH_OPTIONS)
     command = [
-        "rsync", "-rt", "--partial", "--progress", "-e", ssh_transport,
+        "rsync", "-rt", "--partial", "--progress", "--timeout=120", "-e", ssh_transport,
         "{}:{}/".format(alias, remote_result["run_dir"]), str(incoming) + "/",
     ]
-    run_command(command)
+    for attempt in range(3):
+        validate_local_mount(local_root, mount_root, mount_uuid)
+        free = shutil.disk_usage(str(local_root)).free
+        if free < required:
+            raise ValueError("local disk has {} bytes free; {} required".format(free, required))
+        result = run_command(command, check=False)
+        if result.returncode == 0:
+            break
+        error = RuntimeError("rsync failed ({}) for {}:\nstdout:\n{}\nstderr:\n{}".format(
+            result.returncode, incoming, result.stdout, result.stderr))
+        print("{} transfer attempt {}/3: {}".format(utc_now(), attempt + 1, error),
+              file=sys.stderr, flush=True)
+        transport_error = result.returncode in (10, 30, 35) or (
+            result.returncode in (12, 255) and any(message in result.stderr.lower() for message in (
+                "connection unexpectedly closed", "connection reset", "connection timed out",
+                "broken pipe", "connection closed by", "network is unreachable", "no route to host")))
+        storage_error = any(message in result.stderr.lower() for message in (
+            "input/output error", "permission denied", "no space left", "read-only file system",
+            "host key verification failed", "remote host identification has changed"))
+        if attempt == 2 or not transport_error or storage_error:
+            raise error
+        time.sleep((5, 15)[attempt])
     validate_local_mount(local_root, mount_root, mount_uuid)
     verified = verify_local_run(incoming)
     if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"],
