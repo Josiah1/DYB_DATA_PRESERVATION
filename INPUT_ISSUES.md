@@ -1,63 +1,35 @@
-# Unexpected input-file issues
+# Recorded missing input files
 
-Provisional record, updated **2026-09-29T17:28:32+00:00**. This is not the final campaign-wide
-missing-file list: **828,445 expected inputs have not yet been assessed**.
+Campaign ledger snapshot: **2026-10-08T09:24:38+00:00**. The campaign is ongoing.
 
-## Coverage and findings
+- **407 individual mini files** recorded missing with `ENOENT` (errno 2).
+- **279** omitted from verified local archives (`skipped`).
+- **128** recorded for omission during run preparation (`skip_recorded`).
+- **12** earlier mini failures were preserved from their exact originals;
+  their provenance remains in the ledger and they are excluded from this lost-input list.
 
-- Fixed catalog: 4,009 runs / 831,334 source files.
-- Archived completed-run metadata: 11 runs / 2,763 preserved inputs.
-- Additional live check: all 126 inputs in P17B/EH1/run21540.
-- **14 mini-file access failures recorded**: 12 were recovered from their exact
-  originals and preserved; 1 has a readable original header but is not yet
-  processed; 1 remains unavailable from both attempted sources.
+[Plain path list](missing-input-files.list) has one full All-mini input path per line.
+[CSV](missing-input-files.csv) adds filename, period, hall, run, zero-based catalog index,
+disposition, observation time, original catalog path, checksum, and evidence.
+Each row identifies a file. Scheduler timeouts, bad-run classifications, I/O
+errors, invalid ROOT headers, and unassessed inputs are excluded.
 
-The archived observations come from each completed run's `run.json`; this check
-did not repeat output checksums. The new source check opens files read-only and
-checks their four-byte ROOT headers; it does not establish full ROOT readability.
-Exact catalog paths, zero-based catalog indices, catalog checksums, observations,
-and error messages are retained in [input-issues.json](input-issues.json).
+Coverage is finalized archives plus recorded preparation observations. At this
+snapshot, 255 of 4009 runs were finalized,
+with 54,098 preserved inputs and 279 finalized omissions
+out of 831,334 catalog inputs. Further missing files may be
+recorded as the campaign processes the remaining catalogs. Absence is established
+at each recorded observation time; this export does not probe source storage again.
 
-| Period | Hall | Run | Source-file number | Recorded disposition |
-|---|---|---|---|---|
-| P17B | EH1 | run21228 | `0200` | Preserved from exact original |
-| P17B | EH1 | run21235 | `0076` | Preserved from exact original |
-| P17B | EH1 | run21358 | `0056` | Preserved from exact original |
-| P17B | EH1 | run21367 | `0216` | Preserved from exact original |
-| P17B | EH1 | run21367 | `0259` | Preserved from exact original |
-| P17B | EH1 | run21367 | `0303` | Preserved from exact original |
-| P17B | EH1 | run21505 | `0006` | Preserved from exact original |
-| P17B | EH1 | run21508 | `0041` | Preserved from exact original |
-| P17B | EH1 | run21508 | `0139` | Preserved from exact original |
-| P17B | EH1 | run21508 | `0217` | Preserved from exact original |
-| P17B | EH1 | run21520 | `0065` | Preserved from exact original |
-| P17B | EH1 | run21520 | `0185` | Preserved from exact original |
-| P17B | EH1 | run21540 | `0103` | Mini missing; original I/O error; blocked |
-| P17B | EH1 | run21540 | `0159` | Original header readable; not processed |
+Source: Ubuntu's `provenance/input-issues.json` on archive disk UUID
+`2A4F48F8BDFEE355`, copied to [input-issues.json](input-issues.json).
+The ledger retains retry evidence, historical recoveries, and prior observations.
 
-## Current blocker
+After copying an updated ledger, regenerate and validate the lists with:
 
-For **P17B/EH1/run21540, file 0103**:
+```sh
+~/TOOLs/install/python-current/bin/python3 scripts/export_missing_files.py
+```
 
-- Mini: `/lustrefs/juno26/dyw/rec/All-mini/runs_0021000/runs_0021500/run_0021540/minirecon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0103.root`
-- Mini result: `FileNotFoundError`, errno 2 (no such file).
-- Exact original: `/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021540/recon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._0103.root`
-- Original result: `OSError`, errno 5 (input/output error).
-
-The original is unreadable in this observation; its permanent absence has not
-been established. No input was intentionally omitted, and no campaign restart
-was performed while preparing this record.
-
-## Final campaign record
-
-Retain every unexpected access failure, including mini failures successfully
-recovered from exact originals. At campaign close, refresh this record against
-all fixed-catalog entries and reconcile preserved, explicitly omitted,
-unavailable, and unassessed inputs with the expected total. Keep missing paths,
-I/O errors, and invalid ROOT headers distinct. Do not label unassessed files as
-missing or call the archive complete while catalog gaps remain.
-
-The Ubuntu disk copy is under
-`/media/josiah/LAYJ萤捷1/DYB_DATA_PRESERVATION/provenance/` on disk UUID
-`2A4F48F8BDFEE355`. This record supplements existing per-run provenance; it does
-not change the pipeline's current stop-on-unavailable-input behavior.
+The exporter checks each catalog checksum and file index, exact mini-path mapping,
+missing-file evidence, unique paths, and the finalized omission total before writing.
