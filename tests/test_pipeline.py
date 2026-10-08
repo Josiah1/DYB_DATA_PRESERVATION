@@ -108,6 +108,57 @@ class PipelineTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'ambiguous submission'):
                     invoke()
 
+    def test_expired_incomplete_arrays_retry_only_after_jobs_exit_and_within_attempt_limit(self):
+        record = preserve.inventory_records()[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'provenance').mkdir()
+            local = root / 'data'
+            local.mkdir()
+            args = preserve.build_parser().parse_args([
+                'run', '--local-root', str(local), '--mount-root', str(root),
+                '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                '--files-per-job', '2000', '--skip-missing-minis'])
+            marker = dict(record, run_dir='/stage/run', code_root='/code', chunk_count=1,
+                          files_per_job=2000, selection=preserve.selection_record('off'),
+                          input_source='mini', skip_missing_minis=True)
+            for state, queued, attempts, expired, retries, error in (
+                    ('PENDING', False, 1, True, 1, 'snapshot boundary'),
+                    ('RUNNING', False, 1, True, 1, 'snapshot boundary'),
+                    ('PENDING', False, 1, False, 0, 'snapshot boundary'),
+                    ('RUNNING', True, 1, True, 0, 'wait timeout'),
+                    ('PENDING', False, 2, True, 0, 'exhausted submission attempts')):
+                with self.subTest(state=state, queued=queued, attempts=attempts, expired=expired):
+                    submissions = [dict(cluster_id=i, submitted_at=(
+                        '2000-01-01T00:00:00+00:00' if expired else preserve.utc_now()))
+                        for i in range(attempts)]
+                    jobs = [dict(Iwd=marker['run_dir'], JobStatus=2, RequestCpus=1)] if queued else []
+                    pool = dict(runs=[dict(marker=marker, submissions=submissions, intent=False,
+                                          status=dict(state=state, running=int(state == 'RUNNING'), failed=0))],
+                                jobs=jobs, queue=preserve.queue_counts(jobs), reserved_bytes=preserve.GIB,
+                                output_bytes=0, quota=dict(free_bytes=500 * preserve.GIB, used_files=10,
+                                                         limit_files=200000))
+                    queries, submitted = [], []
+
+                    def remote(alias, code, arguments):
+                        if arguments[0] == '_pool':
+                            if queries:
+                                raise RuntimeError('snapshot boundary')
+                            queries.append(True)
+                            return pool, 0
+                        self.assertEqual(arguments[0], '_submit', 'no finalization or cleanup of incomplete data')
+                        self.assertIn('--resubmit', arguments)
+                        submitted.append(arguments)
+                        return dict(cluster_id=100), 0
+
+                    with mock.patch('preserve.remote_json', side_effect=remote), \
+                            mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                            mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                            mock.patch('preserve.time.sleep'):
+                        with self.assertRaisesRegex(RuntimeError, error):
+                            preserve.run_pipeline(args, [record], {}, local)
+                    self.assertEqual(len(submitted), retries)
+
     def test_pipeline_adopts_inflight_refills_during_transfer_and_only_cleans_verified(self):
         records = preserve.inventory_records()[:5]
         with tempfile.TemporaryDirectory() as temporary:

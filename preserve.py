@@ -1681,11 +1681,14 @@ def run_pipeline(args, selected, snapshot, local_root):
                             transferring = marker
                             transfer = executor.submit(transfer_run, marker)
                         continue
+                    expired = False
                     if run["submissions"]:
                         elapsed = time.time() - dt.datetime.fromisoformat(run["submissions"][-1]["submitted_at"]).timestamp()
-                        if elapsed > args.run_timeout:
+                        expired = elapsed > args.run_timeout
+                        if expired and own:
                             raise RuntimeError("run exceeded wait timeout; jobs retained: " + key)
-                    retry = status["state"] == "FAILED" and not own
+                    # Scheduler kills before worker startup can leave no .fail or .running file.
+                    retry = not own and (status["state"] == "FAILED" or expired)
                     if retry and len(run["submissions"]) >= args.max_attempts:
                         raise RuntimeError("run exhausted submission attempts: " + key)
                     if run["intent"] or not run["submissions"] or retry:
@@ -1700,6 +1703,9 @@ def run_pipeline(args, selected, snapshot, local_root):
                                  "--memory-mb", str(args.memory_mb), "--max-jobs", str(args.max_jobs)]
                         if retry:
                             extra.append("--resubmit")
+                            if expired:
+                                print("retrying expired incomplete run {}; no scheduler jobs remain; "
+                                      "verified chunks retained".format(key), flush=True)
                         submission = call("_submit", marker, extra)
                         print("submitted/adopted {} cluster {}".format(key, submission["cluster_id"]), flush=True)
                         submitted = True

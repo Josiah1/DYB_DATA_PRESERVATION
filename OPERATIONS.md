@@ -17,6 +17,19 @@ cluster can be adopted; an ambiguous result stops for inspection, never blind re
 Retries wait until the old array has left the scheduler. Held or failed jobs
 stop new work and remain available for diagnosis.
 
+An incomplete array can outlive its scheduler jobs without any worker failure
+marker: on October 8, task `81949511.15` of run43037 was killed at the short
+class's 30-minute limit before creating worker logs/status. Seventeen other
+chunks were verified. After the existing two-hour wait limit, an incomplete
+array with no jobs in a successful global scheduler query uses the existing
+bounded retry (two submissions maximum), rather than stopping forever on the
+old submission timestamp. The submission helper independently rechecks that
+no jobs remain before retrying; workers reopen and verify completed chunks,
+then reuse them. Queued expired jobs, exhausted attempts, held jobs and query
+errors still stop safely. This is job recovery, never a missing-mini skip;
+catalogs, gaps and verified outputs stay intact. The scheduler class and its
+30-minute limit are unchanged.
+
 The staging admission budget is **400 GiB**, reserving a conservative 1 GiB per
 chunk while an array is unfinished. Once all chunks are complete and every job
 has exited the scheduler, that run reserves its actual output size plus 1 MiB
