@@ -1,6 +1,8 @@
 import hashlib
+import errno
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -9,6 +11,78 @@ import preserve
 
 
 class PreserveTests(unittest.TestCase):
+    def test_disk_recovery_requires_current_mount_path_and_a_new_boot(self):
+        script = Path(preserve.__file__).parent / 'scripts/recover_campaign_disk.sh'
+        boot = Path('/proc/sys/kernel/random/boot_id')
+        if not boot.exists():
+            self.skipTest('Linux boot guard')
+        for arguments, reason in (([], 'usage:'),
+                (['old-boot', '220', 'P17B/EH1/run37942', 'relative'], 'absolute mount path'),
+                (['old-boot', '220', 'P17B/EH1/run37942', '/'], 'absolute mount path'),
+                ([boot.read_text().strip(), '220', 'P17B/EH1/run37942', '/media/current disk'], 'old kernel')):
+            result = subprocess.run(['bash', str(script)] + arguments, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(reason, result.stderr)
+
+    def test_missing_minis_are_gaps_but_io_permissions_and_outages_stop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical = ["/dybfs/rec/P17B/rec/runs_0021000/runs_0021500/run_0021540/"
+                         "recon.Neutrino.0021540.Physics.EH1-Merged.P17B-I._{:04d}.root".format(i)
+                         for i in range(1, 6)]
+            catalog = root / "run21540.list"
+            catalog.write_text("\n".join(canonical) + "\n")
+            with mock.patch.object(preserve, "MINI_ROOT", str(root / "mini")):
+                minis = preserve.resolve_inputs(canonical)
+                for path in minis:
+                    Path(path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(path).write_bytes(b"root synthetic")
+                Path(minis[1]).unlink()
+                real_open = open
+
+                def mini_only(path, *args, **kwargs):
+                    self.assertFalse(str(path).startswith('/dybfs/'), "must never open an original")
+                    return real_open(path, *args, **kwargs)
+
+                with mock.patch('builtins.open', side_effect=mini_only) as opened:
+                    marker = preserve.prepare_run(str(catalog), "P17B", "EH1", str(root / "stage"),
+                                                  str(root / "code"), 2, require_registered=False,
+                                                  skip_missing_minis=True)
+                self.assertEqual((marker['input_count'], marker['processed_input_count'],
+                                  marker['skipped_input_count']), (5, 4, 1))
+                self.assertEqual(preserve.recorded_inputs(canonical, marker), [minis[0]] + minis[2:])
+                self.assertEqual(marker['skipped_inputs'][0]['mini_check']['attempts'][-1]['errno'], errno.ENOENT)
+                self.assertEqual(Path(marker['run_dir'], 'catalog.list').read_bytes(), catalog.read_bytes())
+                changed = dict(marker, resolved_inputs=list(marker['resolved_inputs']))
+                changed['resolved_inputs'][0] = canonical[0]
+                with self.assertRaisesRegex(ValueError, 'exact mini/recon identities'):
+                    preserve.recorded_inputs(canonical, changed)
+                changed = dict(marker, skipped_inputs=[])
+                with self.assertRaises(ValueError):
+                    preserve.recorded_inputs(canonical, changed)
+                with mock.patch('builtins.open', side_effect=[OSError(errno.EIO, 'transient'),
+                                OSError(errno.EIO, 'transient'), real_open(minis[0], 'rb')]), \
+                        mock.patch('preserve.time.sleep') as sleep:
+                    check = preserve.probe_input(minis[0])
+                self.assertEqual([a['status'] for a in check['attempts']], ['io_error', 'io_error', 'ok'])
+                self.assertEqual(sleep.call_count, 2)
+                with mock.patch('builtins.open', side_effect=OSError(errno.EIO, 'I/O error')), \
+                        mock.patch('preserve.time.sleep'):
+                    with self.assertRaisesRegex(ValueError, 'not confirmed missing'):
+                        preserve.available_inputs(canonical)
+                with mock.patch('builtins.open', side_effect=PermissionError(errno.EACCES, 'permission')):
+                    with self.assertRaises(PermissionError):
+                        preserve.available_inputs(canonical)
+                Path(minis[0]).write_bytes(b'bad header')
+                with self.assertRaisesRegex(ValueError, 'not confirmed missing'):
+                    preserve.available_inputs(canonical)
+                for path in minis:
+                    Path(path).unlink(missing_ok=True)
+                with mock.patch('builtins.open', side_effect=mini_only) as opened:
+                    with self.assertRaisesRegex(ValueError, 'possible mini storage outage'):
+                        preserve.available_inputs(canonical)
+                self.assertEqual(opened.call_count, 6)
+
     def test_exact_original_fallback_is_explicit_and_frozen_on_resume(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -54,11 +128,82 @@ class PreserveTests(unittest.TestCase):
             mount = Path(temporary)
             archive = mount / "data"
             with mock.patch("preserve.os.path.ismount", return_value=True), \
-                    mock.patch("preserve.run_command", return_value=mock.Mock(stdout="disk-a\n")):
+                    mock.patch("preserve.run_command", return_value=mock.Mock(stdout="disk-a fuseblk rw,nosuid\n")) as mount_info:
                 with self.assertRaisesRegex(ValueError, "UUID"):
                     preserve.validate_local_mount(archive, mount, "disk-b")
                 self.assertFalse(archive.exists())
+                for description, message in (("disk-a ntfs3 rw\n", "NTFS3"),
+                                             ("disk-a fuseblk ro\n", "read-write")):
+                    mount_info.return_value.stdout = description
+                    with self.assertRaisesRegex(ValueError, message):
+                        preserve.validate_local_mount(archive, mount, "disk-a")
+                    self.assertFalse(archive.exists())
+                mount_info.return_value.stdout = "disk-a fuseblk rw,nosuid\n"
                 self.assertEqual(preserve.validate_local_mount(archive, mount, "disk-a"), archive)
+
+    def test_transfer_retries_resume_partial_and_never_publish_failed_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            remote = dict(period='P17B', hall='EH1', stem='run37945', run_dir='/stage/run37945',
+                          artifact_bytes=10, catalog_sha256='catalog', schema_version=preserve.SCHEMA_VERSION,
+                          selection=preserve.selection_record('on'), input_source='mini')
+            final = root / 'P17B/EH1/run37945'
+            incoming = final.with_name('.run37945.incoming')
+            incoming.mkdir(parents=True)
+            partial = incoming / 'partial.root'
+            partial.write_bytes(b'previous partial')
+            success = mock.Mock(returncode=0, stdout='', stderr='')
+            disconnected = mock.Mock(returncode=12, stdout='partial transfer',
+                                     stderr='rsync: connection unexpectedly closed')
+            verified = dict(catalog_sha256='catalog', schema_version=preserve.SCHEMA_VERSION,
+                            ad_selection='on', input_source='mini')
+
+            def transfer(command, check):
+                self.assertFalse(check)
+                self.assertIn('--partial', command)
+                self.assertIn('--timeout=120', command)
+                self.assertEqual(command[-1], str(incoming) + '/')
+                self.assertEqual(partial.read_bytes(), b'previous partial')
+                return responses.pop(0)
+
+            responses = [disconnected, success]
+            with mock.patch('preserve.validate_local_mount', return_value=root) as mount_check, \
+                    mock.patch('preserve.run_command', side_effect=transfer) as copy, \
+                    mock.patch('preserve.time.sleep') as sleep, \
+                    mock.patch('preserve.verify_local_run', side_effect=ValueError('checksum mismatch')):
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    preserve.sync_run('host', remote, root, root, 'disk')
+            self.assertEqual((copy.call_count, mount_check.call_count), (2, 4))
+            sleep.assert_called_once_with(5)
+            self.assertTrue(partial.is_file())
+            self.assertFalse(final.exists())
+            for response, attempts in ((disconnected, 3),
+                    (mock.Mock(returncode=11, stdout='', stderr='Input/output error'), 1),
+                    (mock.Mock(returncode=23, stdout='', stderr='source vanished'), 1),
+                    (mock.Mock(returncode=12, stdout='', stderr='Permission denied; connection unexpectedly closed'), 1),
+                    (mock.Mock(returncode=255, stdout='', stderr='Host key verification failed'), 1)):
+                with mock.patch('preserve.validate_local_mount', return_value=root), \
+                        mock.patch('preserve.run_command', return_value=response) as copy, \
+                        mock.patch('preserve.time.sleep'), mock.patch('preserve.verify_local_run') as verify:
+                    with self.assertRaises(RuntimeError):
+                        preserve.sync_run('host', remote, root, root, 'disk')
+                self.assertEqual(copy.call_count, attempts)
+                verify.assert_not_called()
+                self.assertTrue(partial.is_file())
+                self.assertFalse(final.exists())
+            with mock.patch('preserve.validate_local_mount', side_effect=[root, root, ValueError('UUID changed')]), \
+                    mock.patch('preserve.run_command', return_value=disconnected) as copy, \
+                    mock.patch('preserve.time.sleep'):
+                with self.assertRaisesRegex(ValueError, 'UUID changed'):
+                    preserve.sync_run('host', remote, root, root, 'disk')
+            self.assertEqual(copy.call_count, 1)
+            responses = [disconnected, success]
+            with mock.patch('preserve.validate_local_mount', return_value=root), \
+                    mock.patch('preserve.run_command', side_effect=transfer), mock.patch('preserve.time.sleep'), \
+                    mock.patch('preserve.verify_local_run', return_value=verified):
+                self.assertEqual(preserve.sync_run('host', remote, root, root, 'disk')['directory'], str(final))
+            self.assertEqual((final / partial.name).read_bytes(), b'previous partial')
+            self.assertFalse(incoming.exists())
 
     def test_catalog_backups_are_complete_and_used(self):
         report = preserve.verify_catalog_backups()
@@ -251,6 +396,15 @@ class PreserveTests(unittest.TestCase):
             result.update(input_source="mini-or-recon", resolved_inputs=[mini_path])
             preserve.atomic_json(run_dir / "run.json", result)
             self.assertEqual(preserve.verify_all(archive)["input_source"], "mini-or-recon")
+            before = (run_dir / 'run.json').read_bytes()
+            preserve.save_inventory_snapshot(archive, snapshot['records'], 'mini', skip_missing_minis=True)
+            self.assertEqual((run_dir / 'run.json').read_bytes(), before)
+            updated = preserve.load_json(archive / 'catalog-inventory.json')
+            self.assertEqual(preserve.archive_input_sources(updated, 'P17B/EH1/chunk'), {'mini-or-recon'})
+            self.assertEqual(preserve.archive_input_sources(updated, 'P17B/EH1/newrun'), {'mini'})
+            self.assertEqual(preserve.verify_all(archive)['input_sources_present'], ['mini-or-recon'])
+            with self.assertRaisesRegex(ValueError, 'mini-only'):
+                preserve.save_inventory_snapshot(archive, snapshot['records'], 'mini-or-recon')
             result["resolved_inputs"] = ["/wrong/source.root"]
             preserve.atomic_json(run_dir / "run.json", result)
             with self.assertRaisesRegex(ValueError, "exact mini/recon identities"):

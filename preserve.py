@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""One-run-at-a-time preservation pipeline for the fixed Daya Bay catalogs."""
+"""Bounded preservation pipeline for the fixed Daya Bay catalogs."""
 
 import argparse
 import concurrent.futures
 import datetime as dt
+import errno
+import fcntl
 import functools
 import hashlib
 import json
 import math
 import os
+import pwd
 from pathlib import Path
 import re
 import shlex
@@ -34,6 +37,10 @@ DEFAULT_ALIAS = "dayabay1"
 DEFAULT_CODE_ROOT = "/dybfs2/users/lijj16/DYB_DATA_PRESERVATION/code"
 DEFAULT_STAGE_ROOT = "/dybfs2/users/lijj16/DYB_DATA_PRESERVATION/staging"
 DEFAULT_LCG_VIEW = "/cvmfs/sft.cern.ch/lcg/views/LCG_110/x86_64-el9-gcc13-opt"
+GIB = 1024 ** 3
+# Conservative admission reservation, not an output-size prediction or truncation limit.
+CHUNK_RESERVE_BYTES = GIB
+SCRATCH_HEADROOM_BYTES = 30 * GIB
 CATALOG_BACKUP_ROOT = Path(__file__).resolve().parent / "catalog_backups"
 CATALOG_BACKUP_SUMS = CATALOG_BACKUP_ROOT / "SHA256SUMS"
 EXPECTED_CATALOG_BACKUPS = 4009
@@ -226,14 +233,111 @@ def resolve_inputs(paths, source=DEFAULT_INPUT_SOURCE):
 
 def recorded_inputs(paths, record):
     source = input_source_mode(record)
-    if source != "mini-or-recon":
+    if ((record.get("skip_missing_minis") and source != "mini") or
+            (record.get("skipped_inputs") and not record.get("skip_missing_minis"))):
+        raise ValueError("gaps require the recorded mini-only skip policy")
+    if source != "mini-or-recon" and not record.get("skip_missing_minis"):
         return resolve_inputs(paths, source)
     inputs = record.get("resolved_inputs")
     minis = resolve_inputs(paths, "mini")
+    skipped = record.get("skipped_inputs", [])
+    gaps = {}
+    for issue in skipped:
+        index = issue["catalog_index"]
+        if (type(index) is not int or not 0 <= index < len(paths) or index in gaps or
+                issue["catalog_entry"] != paths[index]):
+            raise ValueError("invalid skipped catalog identity")
+        dt.datetime.fromisoformat(issue["observed_at"])
+        check = issue["mini_check"]
+        if (source != "mini" or check["path"] != minis[index] or check["status"] != "missing" or
+                not check["attempts"] or check["attempts"][-1]["status"] != "missing" or
+                check["attempts"][-1]["errno"] != errno.ENOENT):
+            raise ValueError("skipped input is not a confirmed missing mini")
+        gaps[index] = issue
     if (not isinstance(inputs, list) or len(inputs) != len(paths) or
-            any(actual not in (original, mini) for actual, original, mini in zip(inputs, paths, minis))):
+            any(actual is not None if index in gaps else
+                actual not in ((mini,) if source == "mini" else (original, mini))
+                for index, (actual, original, mini) in enumerate(zip(inputs, paths, minis)))):
         raise ValueError("resolved inputs do not match the fixed catalog's exact mini/recon identities")
-    return inputs
+    usable = [path for path in inputs if path is not None]
+    if record.get("skip_missing_minis") and (
+            record.get("processed_input_count") != len(usable) or
+            record.get("skipped_input_count") != len(skipped)):
+        raise ValueError("processed and skipped input accounting does not match the catalog")
+    if not skipped and record.get("skipped_input_count", 0):
+        raise ValueError("skipped input count has no gap records")
+    return usable
+
+
+def probe_input(path):
+    """Read-only header check; retry transient storage errors twice, never permissions."""
+    attempts = []
+    for attempt in range(3):
+        code, reason = None, None
+        try:
+            with open(path, "rb") as stream:
+                status = "ok" if stream.read(4) == b"root" else "invalid_root"
+            if status == "invalid_root":
+                reason = "not a ROOT file header"
+        except OSError as error:
+            code, reason = error.errno, str(error)
+            if code == errno.ENOENT:
+                status = "missing"
+            elif code in (errno.EIO, errno.ESTALE, errno.ETIMEDOUT):
+                status = "io_error"
+            else:
+                raise  # Permission, descriptor, device and other systemic errors stop the run.
+        attempts.append(dict(timestamp=utc_now(), status=status, errno=code, reason=reason))
+        if status not in ("missing", "io_error"):
+            break
+        if status == "missing" and len(attempts) >= 2 and attempts[-2]["status"] == "missing":
+            break
+        if attempt == 2:
+            if status == "missing":
+                status = "unstable"  # An ENOENT after I/O errors is not confirmed absence.
+            break
+        time.sleep(0.2 if status == "missing" else attempt + 1)
+    return dict(path=path, status=status, attempts=attempts)
+
+
+def check_input_storage():
+    with os.scandir(MINI_ROOT) as entries:
+        if next(entries, None) is None:
+            raise ValueError("mini storage is empty: {}".format(MINI_ROOT))
+
+
+def available_inputs(paths):
+    check_input_storage()
+    resolved, skipped = [], []
+    consecutive = 0
+    for index, (original, mini) in enumerate(zip(paths, resolve_inputs(paths))):
+        mini_check = probe_input(mini)
+        if mini_check["status"] == "ok":
+            resolved.append(mini)
+            consecutive = 0
+            continue
+        check_input_storage()
+        issue = dict(catalog_index=index, catalog_entry=original, observed_at=utc_now(),
+                     mini_check=mini_check)
+        if mini_check["status"] != "missing":
+            raise ValueError("mini input is not confirmed missing; no run staged: {}".format(
+                json.dumps(issue, sort_keys=True)))
+        resolved.append(None)
+        skipped.append(issue)
+        consecutive += 1
+        # Stop a suspected outage before recording a run full of false gaps.
+        if consecutive >= 3 or len(skipped) > max(3, len(paths) // 10):
+            raise ValueError("possible mini storage outage; no run staged: {}".format(
+                json.dumps(issue, sort_keys=True)))
+    if not any(resolved):
+        raise ValueError("no usable inputs; refusing to classify the entire run as gaps")
+    check_input_storage()
+    return resolved, skipped
+
+
+def gap_report(record):
+    return {key: record[key] for key in (
+        "catalog_sha256", "input_count", "processed_input_count", "skipped_input_count", "skipped_inputs")}
 
 
 def check_input_files(paths):
@@ -370,7 +474,8 @@ def inventory_records():
 
 
 def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
-                require_registered=True, ad_selection="off", input_source=DEFAULT_INPUT_SOURCE):
+                require_registered=True, ad_selection="off", input_source=DEFAULT_INPUT_SOURCE,
+                skip_missing_minis=False):
     selection = selection_record(ad_selection)
     catalog = os.path.normpath(catalog)
     if require_registered and not registered_catalog(period, hall, catalog):
@@ -386,6 +491,8 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
     catalog_data, catalog_source, catalog_backup = read_catalog_data(period, hall, catalog)
     catalog_sha = hashlib.sha256(catalog_data).hexdigest()
     catalog_paths = parse_catalog_inputs(catalog_data, catalog)
+    if skip_missing_minis and input_source != "mini":
+        raise ValueError("skipping missing minis requires mini-only inputs")
 
     run_dir = (Path(stage_root) / period / hall / stem).resolve()
     if run_dir.exists():
@@ -396,11 +503,16 @@ def prepare_run(catalog, period, hall, stage_root, code_root, files_per_job,
                   input_source_mode(marker), marker.get("output_prefix"))
         if actual != expected:
             raise ValueError("existing run staging does not match requested catalog")
+        if marker.get("skip_missing_minis", False) != skip_missing_minis:
+            raise ValueError("existing run staging has a different gap policy")
         recorded_inputs(catalog_paths, marker)
         return marker
 
-    fallbacks = []
-    if input_source == "mini-or-recon":
+    fallbacks, skipped = [], []
+    if skip_missing_minis:
+        resolved, skipped = available_inputs(catalog_paths)
+        inputs = [path for path in resolved if path is not None]
+    elif input_source == "mini-or-recon":
         inputs = resolve_inputs(catalog_paths, "mini")
         for index, path in enumerate(inputs):
             try:
@@ -451,7 +563,7 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
             "catalog_source": catalog_source,
             "catalog_sha256": catalog_sha,
             "input_source": input_source,
-            "input_count": len(inputs),
+            "input_count": len(catalog_paths),
             "files_per_job": files_per_job,
             "chunk_count": len(chunks),
             "run_dir": str(run_dir),
@@ -463,6 +575,12 @@ exec bash {code}/scripts/worker.sh {run} \"$1\" {code}
         if input_source == "mini-or-recon":
             marker["resolved_inputs"] = inputs
             marker["reconstruction_fallbacks"] = fallbacks
+        if skip_missing_minis:
+            marker.update(skip_missing_minis=True, resolved_inputs=resolved, processed_input_count=len(inputs),
+                          skipped_input_count=len(skipped), skipped_inputs=skipped)
+        if skipped:
+            atomic_json(temporary / "input-gaps.json", gap_report(marker))
+        recorded_inputs(catalog_paths, marker)
         atomic_json(temporary / "manifest.json", marker)
         atomic_json(temporary / MARKER_NAME, marker)
         os.rename(str(temporary), str(run_dir))
@@ -484,22 +602,149 @@ def load_run(run_dir, stage_root):
     return run_dir, marker
 
 
-def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False):
+def scheduler_jobs(stage_root):
+    result = subprocess.run([
+        "condor_q", "-global", pwd.getpwuid(os.getuid()).pw_name, "-json", "-attributes",
+        "ClusterId,ProcId,JobStatus,RequestCpus,Cmd,Iwd,HoldReason",
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+    if result.returncode or result.stderr.strip():
+        raise RuntimeError("scheduler query failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
+            result.returncode, result.stdout, result.stderr))
+    # HTCondor emits nothing for an empty global queue, and may emit one array per schedd.
+    pending, jobs = result.stdout.lstrip(), []
+    while pending:
+        rows, end = json.JSONDecoder().raw_decode(pending)
+        if not isinstance(rows, list):
+            raise ValueError("invalid scheduler response")
+        jobs.extend(rows)
+        pending = pending[end:].lstrip()
+    prefix = str(Path(stage_root)) + "/"
+    jobs = [job for job in jobs if job.get("Cmd", "").startswith(prefix)]
+    for job in jobs:
+        if job["RequestCpus"] != 1 or job["JobStatus"] not in range(1, 8):
+            raise ValueError("unexpected campaign CPU request or scheduler state: {}".format(job))
+    return jobs
+
+
+def queue_counts(jobs):
+    return dict(outstanding=len(jobs), running=sum(j["JobStatus"] == 2 for j in jobs),
+                idle=sum(j["JobStatus"] == 1 for j in jobs),
+                held=sum(j["JobStatus"] == 5 for j in jobs),
+                running_cpus=sum(j["RequestCpus"] for j in jobs if j["JobStatus"] == 2))
+
+
+def scratch_quota(stage_root):
+    result = run_command(["/usr/bin/lfs", "quota", "-u", str(os.getuid()), stage_root])
+    rows = []
+    for line in result.stdout.splitlines():
+        if line.strip().startswith("/"):
+            rows.append(line.split())
+        elif rows and len(rows[-1]) == 1 and line.strip():
+            rows[-1].extend(line.split())  # lfs wraps long paths onto a separate line.
+    if len(rows) != 1 or len(rows[0]) != 9:
+        raise ValueError("cannot read scratch quota: " + result.stdout)
+    row = rows[0]
+    used, soft, hard = [int(value.rstrip("*")) * 1024 for value in row[1:4]]
+    files, file_soft, file_hard = [int(value.rstrip("*")) for value in row[5:8]]
+    limits = [n for n in (soft, hard) if n]
+    file_limits = [n for n in (file_soft, file_hard) if n]
+    if not limits or not file_limits:
+        raise ValueError("scratch quota must have explicit byte and file limits")
+    return dict(used_bytes=used, limit_bytes=min(limits), used_files=files,
+                limit_files=min(file_limits),
+                free_bytes=min(min(limits) - used, shutil.disk_usage(stage_root).free))
+
+
+def pool_status(stage_root):
+    stage_root = validate_remote_path(stage_root, "stage root")
+    jobs = scheduler_jobs(stage_root)
+    runs = []
+    for path in sorted(Path(stage_root).glob("*/*/*/" + MARKER_NAME)):
+        directory, marker = load_run(path.parent, stage_root)
+        submissions = directory / "submissions.json"
+        # Workers rename their partial output atomically; disappearance during this size scan is normal.
+        output_bytes = 0
+        for output in (directory / "outputs").iterdir():
+            try:
+                output_bytes += output.stat().st_size
+            except FileNotFoundError:
+                pass
+        status = run_status(directory, stage_root)
+        drained = (status["state"] == "COMPLETE" and not status["running"] and
+                   not any(j["Iwd"] == str(directory) for j in jobs))
+        reserve = (output_bytes + marker["chunk_count"] * 1024 ** 2 if drained else
+                   max(output_bytes, marker["chunk_count"] * CHUNK_RESERVE_BYTES))
+        runs.append(dict(marker=marker, status=status,
+                         submissions=load_json(submissions) if submissions.exists() else [],
+                         intent=(directory / "submission-intent.json").exists(),
+                         output_bytes=output_bytes,
+                         reserved_bytes=reserve))
+    return dict(checked_at=utc_now(), jobs=jobs, queue=queue_counts(jobs), runs=runs,
+                reserved_bytes=sum(r["reserved_bytes"] for r in runs),
+                output_bytes=sum(r["output_bytes"] for r in runs), quota=scratch_quota(stage_root))
+
+
+def admission_reason(pool, chunks, max_jobs, stage_bytes, local_free):
+    reserve = chunks * CHUNK_RESERVE_BYTES
+    if pool["queue"]["outstanding"] + chunks > max_jobs:
+        return "job cap"
+    if pool["reserved_bytes"] + reserve > stage_bytes:
+        return "staging reservation budget"
+    future_bytes = max(0, pool["reserved_bytes"] - pool["output_bytes"]) + reserve
+    if future_bytes + SCRATCH_HEADROOM_BYTES > pool["quota"]["free_bytes"]:
+        return "scratch quota headroom"
+    if pool["quota"]["used_files"] + 16 * chunks + 1000 >= pool["quota"]["limit_files"]:
+        return "scratch file quota"
+    if (pool["reserved_bytes"] + reserve) * 1.05 > local_free:
+        return "destination free space"
+    return None
+
+
+def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False, max_jobs=300):
     run_dir, marker = load_run(run_dir, stage_root)
+    # Remote lock also protects against two simultaneous submission helpers after an SSH interruption.
+    with (Path(stage_root) / ".submission.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs)
+
+
+def submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs):
     submissions_path = run_dir / "submissions.json"
     submissions = load_json(submissions_path) if submissions_path.exists() else []
+    intent_path = run_dir / "submission-intent.json"
+    jobs = scheduler_jobs(stage_root)
+    own = [j for j in jobs if j["Cmd"] == str(run_dir / "array-job.sh")]
+    if intent_path.exists():
+        intent = load_json(intent_path)
+        clusters = {j["ClusterId"] for j in own}
+        if len(clusters) != 1:
+            raise RuntimeError("ambiguous submission; inspect scheduler before retrying: {}".format(intent_path))
+        submission = dict(intent, cluster_id=clusters.pop(), recovered_at=utc_now())
+        if not any(s["cluster_id"] == submission["cluster_id"] for s in submissions):
+            submissions.append(submission)
+            atomic_json(submissions_path, submissions)
+        intent_path.unlink()
+        return submission
     if submissions and not resubmit:
         return submissions[-1]
+    if own:
+        raise RuntimeError("refusing duplicate submission while this run has queued jobs")
+    if not 1 <= max_jobs <= 300 or len(jobs) + marker["chunk_count"] > max_jobs:
+        raise RuntimeError("submission would exceed the campaign job cap")
     if resubmit:
         for path in (run_dir / "status").glob("*.fail"):
+            path.unlink()
+        for path in (run_dir / "status").glob("*.running"):
             path.unlink()
     hepjob_bin = "/afs/ihep.ac.cn/soft/common/sysgroup/hep_job/bin"
     command = [
         os.path.join(hepjob_bin, "hep_sub"), "-g", group, "-wt", walltime,
-        "-os", "AlmaLinux9",
+        "-os", "AlmaLinux9", "-cpu", "1",
         "-mem", str(memory_mb), str(run_dir / "array-job.sh"),
         "-argu", "%{ProcId}", "-n", str(marker["chunk_count"]),
     ]
+    intent = dict(submitted_at=utc_now(), chunk_count=marker["chunk_count"], command=command)
+    atomic_json(intent_path, intent)
     result = subprocess.run(command, cwd=str(run_dir), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, universal_newlines=True)
     if result.returncode != 0:
@@ -516,6 +761,7 @@ def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False):
     }
     submissions.append(submission)
     atomic_json(submissions_path, submissions)
+    intent_path.unlink()
     return submission
 
 
@@ -662,7 +908,7 @@ def aggregate_duration_reports(run_dir, marker, prefix):
             chunk_kept += kept
             chunk_entries += entries
         chunk_totals.append((chunk_kept, chunk_entries, len(expected_paths)))
-    if len(rows) != marker["input_count"]:
+    if len(rows) != marker.get("processed_input_count", marker["input_count"]):
         raise ValueError("source timing total does not match run input count")
     destination = run_dir / "durations.tsv"
     atomic_text(destination, "\t".join(DURATION_COLUMNS) + "\n" +
@@ -728,11 +974,17 @@ def finalize_run(run_dir, stage_root):
             zip(outputs, durations["chunk_totals"])))
 
     artifacts = outputs + [duration_file]
+    if marker.get("skipped_inputs"):
+        gaps = run_dir / "input-gaps.json"
+        if load_json(gaps) != gap_report(marker):
+            raise ValueError("gap report differs from the frozen run marker")
+        artifacts.append(gaps)
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(artifacts))) as executor:
         hashes = list(executor.map(sha256_file, artifacts))
     checksum_lines = ["{}  outputs/{}".format(digest, path.name)
                       for digest, path in zip(hashes, outputs)]
-    checksum_lines.append("{}  durations.tsv".format(hashes[-1]))
+    checksum_lines.extend("{}  {}".format(digest, path.name)
+                          for digest, path in zip(hashes[len(outputs):], artifacts[len(outputs):]))
     atomic_text(run_dir / "SHA256SUMS", "\n".join(checksum_lines) + "\n")
 
     reports = [parse_result_file(run_dir / "status" / "{:06d}.ok".format(index))
@@ -745,6 +997,7 @@ def finalize_run(run_dir, stage_root):
     result = dict(marker)
     result.update({
         "complete": True,
+        "catalog_complete": not marker.get("skipped_inputs"),
         "completed_at": utc_now(),
         "output_count": len(outputs),
         "output_bytes": sum(path.stat().st_size for path in outputs),
@@ -796,7 +1049,7 @@ def run_command(command, check=True, cwd=None):
     result = subprocess.run(command, cwd=cwd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, universal_newlines=True)
     if check and result.returncode != 0:
-        raise RuntimeError("command failed ({}):\n{}\n{}".format(
+        raise RuntimeError("command failed ({}):\n{}\nstdout:\n{}\nstderr:\n{}".format(
             result.returncode, " ".join(command), result.stdout, result.stderr))
     return result
 
@@ -812,11 +1065,22 @@ def remote_call(alias, code_root, arguments, check=True):
 
 
 def remote_json(alias, code_root, arguments, check=True):
-    result = remote_call(alias, code_root, arguments, check=check)
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
-    if not lines:
-        raise RuntimeError("remote command returned no JSON: {}".format(result.stderr))
-    return json.loads(lines[-1]), result.returncode
+    # Only this read-only snapshot is safe to replay; never retry a submission or cleanup here.
+    attempts = 3 if arguments[0] == "_pool" and check else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            result = remote_call(alias, code_root, arguments, check=check)
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
+            if not lines:
+                raise RuntimeError("remote command returned no JSON: {}".format(result.stderr))
+            return json.loads(lines[-1]), result.returncode
+        except (RuntimeError, json.JSONDecodeError) as error:
+            if attempts > 1:
+                print("{} _pool attempt {}/{} failed: {}".format(
+                    utc_now(), attempt, attempts, error), file=sys.stderr, flush=True)
+            if attempt == attempts:
+                raise
+            time.sleep(attempt)
 
 
 def deployed_inventory(alias, code_root):
@@ -869,6 +1133,11 @@ def verify_local_run(directory, root_verifier=None):
     if actual_outputs != expected_outputs:
         raise ValueError("local ROOT output set is incomplete or contains unexpected files")
     expected_artifacts = expected_outputs | {result["duration_file"]}
+    if result.get("skipped_inputs"):
+        if result.get("catalog_complete") is not False or load_json(
+                directory / "input-gaps.json") != gap_report(result):
+            raise ValueError("gap report or catalog completeness differs from run.json")
+        expected_artifacts.add("input-gaps.json")
     checksums = directory / result["checksums"]
     checked_bytes = 0
     checked_files = 0
@@ -917,6 +1186,10 @@ def verify_local_run(directory, root_verifier=None):
         "catalog_sha256": result["catalog_sha256"],
         "schema_version": result["schema_version"],
         "directory": str(directory),
+        "expected_inputs": len(catalog_paths),
+        "processed_inputs": duration_rows,
+        "skipped_inputs": len(result.get("skipped_inputs", [])),
+        "catalog_complete": not result.get("skipped_inputs"),
     }
 
 
@@ -928,7 +1201,7 @@ def catalog_signature(records):
         raise ValueError("invalid catalog inventory record: {}".format(error))
 
 
-def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOURCE):
+def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOURCE, skip_missing_minis=False):
     input_source_mode({"input_source": input_source})
     bad = [record for record in records if "error" in record]
     if bad:
@@ -941,20 +1214,48 @@ def save_inventory_snapshot(local_root, records, input_source=DEFAULT_INPUT_SOUR
             raise ValueError("existing catalog inventory has the wrong kind or schema")
         if catalog_signature(previous.get("records", [])) != catalog_signature(records):
             raise ValueError("fixed catalog inventory differs from the existing local snapshot")
+        if previous.get("skip_missing_minis") and input_source != "mini":
+            raise ValueError("archive policy requires mini-only inputs for new work")
         if input_source_mode(previous) != input_source:
-            if input_source_mode(previous) != "mini" or input_source != "mini-or-recon":
+            if (skip_missing_minis and input_source == "mini" and
+                    input_source_mode(previous) == "mini-or-recon"):
+                legacy = {}
+                for record in records:
+                    relative = str(Path(record["period"]) / record["hall"] / record["stem"])
+                    result_path = Path(local_root) / relative / "run.json"
+                    if result_path.exists():
+                        result = load_json(result_path)
+                        if not result.get("complete") or result["catalog_sha256"] != record["catalog_sha256"]:
+                            raise ValueError("cannot retain an unfinalized or mismatched legacy run")
+                        if input_source_mode(result) not in ("mini", "mini-or-recon"):
+                            raise ValueError("unexpected legacy input source")
+                        legacy[relative] = input_source_mode(result)
+                previous["legacy_input_sources"] = legacy
+            elif input_source_mode(previous) != "mini" or input_source != "mini-or-recon":
                 raise ValueError("input source differs from the existing local snapshot")
-            previous.update(input_source=input_source, previous_input_source="mini", source_policy_updated_at=utc_now())
+            previous.update(previous_input_source=input_source_mode(previous), input_source=input_source,
+                            source_policy_updated_at=utc_now())
+            if skip_missing_minis:
+                previous["skip_missing_minis"] = True
             atomic_json(path, previous)
         return path
     atomic_json(path, {
         "kind": "dyb-preserve-catalog-inventory",
         "schema_version": SCHEMA_VERSION,
         "input_source": input_source,
+        "skip_missing_minis": skip_missing_minis,
         "created_at": utc_now(),
         "records": records,
     })
     return path
+
+
+def archive_input_sources(snapshot, relative):
+    legacy = snapshot.get("legacy_input_sources", {}).get(relative)
+    if legacy:
+        return {legacy}
+    policy = input_source_mode(snapshot)
+    return {"mini", "mini-or-recon"} if policy == "mini-or-recon" else {policy}
 
 
 def verify_all(local_root, root_verifier=None):
@@ -982,7 +1283,7 @@ def verify_all(local_root, root_verifier=None):
         raise ValueError("preservation set is incomplete: missing={} unexpected={} examples={}".format(
             len(missing), len(unexpected), (missing + unexpected)[:5]))
 
-    total_artifacts = total_bytes = total_inputs = total_entries = total_kept = 0
+    total_artifacts = total_bytes = total_inputs = total_entries = total_kept = total_skipped = 0
     modes = set()
     input_sources = set()
     for relative, record in sorted(expected.items()):
@@ -991,9 +1292,12 @@ def verify_all(local_root, root_verifier=None):
                 record["catalog_sha256"], record["input_count"]):
             raise ValueError("local run does not match inventory: {}".format(relative))
         verified = verify_local_run(actual[relative], root_verifier=root_verifier)
+        if verified["input_source"] not in archive_input_sources(snapshot, relative):
+            raise ValueError("archive input source differs from its catalog inventory snapshot")
         total_artifacts += verified["files"]
         total_bytes += verified["bytes"]
         total_inputs += verified["duration_rows"]
+        total_skipped += verified["skipped_inputs"]
         total_entries += verified["source_entries"]
         total_kept += verified["kept_entries"]
         modes.add(verified["ad_selection"])
@@ -1001,23 +1305,116 @@ def verify_all(local_root, root_verifier=None):
     if len(modes) != 1:
         raise ValueError("archive mixes AD selection modes: {}".format(sorted(modes)))
     policy = input_source_mode(snapshot)
-    if len(input_sources) != 1 and policy != "mini-or-recon":
-        raise ValueError("archive mixes input sources: {}".format(sorted(input_sources)))
-    allowed = {"mini", "mini-or-recon"} if policy == "mini-or-recon" else {policy}
-    if not input_sources <= allowed:
-        raise ValueError("archive input source differs from its catalog inventory snapshot")
     return {
-        "complete": True,
+        "complete": total_skipped == 0,
+        "accounted": True,
+        "status": "finished_with_gaps" if total_skipped else "complete",
         "runs": len(records),
         "inputs": total_inputs,
+        "expected_inputs": total_inputs + total_skipped,
+        "processed_inputs": total_inputs,
+        "skipped_inputs": total_skipped,
         "source_entries": total_entries,
         "kept_entries": total_kept,
         "ad_selection": modes.pop(),
         "input_source": policy,
+        "input_sources_present": sorted(input_sources),
         "artifacts": total_artifacts,
         "bytes": total_bytes,
         "local_root": str(local_root),
     }
+
+
+def archive_progress(local_root):
+    """Count finalized local runs; monitoring does not repeat large artifact hashes."""
+    local_root = Path(local_root)
+    snapshot = load_json(local_root / "catalog-inventory.json")
+    runs = []
+    for expected in snapshot["records"]:
+        directory = local_root / expected["period"] / expected["hall"] / expected["stem"]
+        if not (directory / "run.json").exists():
+            continue
+        record = load_json(directory / "run.json")
+        if (not record.get("complete") or (record["catalog_sha256"], record["input_count"]) !=
+                (expected["catalog_sha256"], expected["input_count"]) or
+                (directory / ".complete").read_text().strip() != record["catalog_sha256"]):
+            raise ValueError("local run does not match the expected completed catalog: {}".format(directory))
+        paths = parse_catalog_inputs((directory / "catalog.list").read_bytes(), str(directory))
+        if len(recorded_inputs(paths, record)) != record["duration_rows"]:
+            raise ValueError("processed input count differs from duration rows")
+        runs.append(record)
+    expected_inputs = sum(r["input_count"] for r in snapshot["records"])
+    processed = sum(r["duration_rows"] for r in runs)
+    skipped = sum(len(r.get("skipped_inputs", [])) for r in runs)
+    finished = len(runs) == len(snapshot["records"])
+    return dict(expected_runs=len(snapshot["records"]), expected_inputs=expected_inputs,
+                completed_runs=len(runs), processed_inputs=processed, skipped_inputs=skipped,
+                pending_inputs=expected_inputs - processed - skipped,
+                artifact_bytes=sum(r["artifact_bytes"] for r in runs), finished=finished,
+                status=("finished_with_gaps" if skipped else "complete") if finished else "in_progress",
+                complete=finished and not skipped), runs
+
+
+def refresh_input_issues(local_root, prepared=None):
+    local_root = Path(local_root)
+    progress, runs = archive_progress(local_root)
+    provenance = local_root.parent / "provenance"
+    provenance.mkdir(exist_ok=True)
+    path = provenance / "input-issues.json"
+    ledger = load_json(path) if path.exists() else {"kind": "dyb-input-issues"}
+    issues = {(i["period"], i["hall"], i["run"], i["catalog_index"]): i
+              for i in ledger.get("issues", [])}
+    for record in runs + ([prepared] if prepared else []):
+        finalized = record in runs
+        relative = Path(record["period"]) / record["hall"] / record["stem"]
+        catalog_file = (local_root / relative / "catalog.list" if finalized else
+                        CATALOG_BACKUP_ROOT / relative.with_suffix(".list"))
+        paths = parse_catalog_inputs(catalog_file.read_bytes(), str(catalog_file))
+        observations = [(item, "skipped" if finalized else "skip_recorded")
+                        for item in record.get("skipped_inputs", [])]
+        observations += [(item, "preserved_from_exact_recon" if finalized else "prepared_from_exact_recon")
+                         for item in record.get("reconstruction_fallbacks", [])]
+        for item, status in observations:
+            original = item.get("catalog_entry", item.get("recon"))
+            index = paths.index(original)
+            key = (record["period"], record["hall"], record["stem"], index)
+            new = dict(item, period=key[0], hall=key[1], run=key[2], catalog_index=index,
+                       catalog=record["catalog"], catalog_sha256=record["catalog_sha256"],
+                       catalog_path=original, status=status,
+                       observed_at=item.get("observed_at", record["created_at"]),
+                       evidence=str(Path("data") / relative / "run.json") if finalized else "frozen run preparation")
+            previous = issues.get(key)
+            if previous:
+                history = previous.get("previous_observations", [])
+                if (previous.get("status"), previous.get("observed_at")) != (status, new["observed_at"]):
+                    history = history + [{k: v for k, v in previous.items() if k != "previous_observations"}]
+                if history:
+                    new["previous_observations"] = history
+            issues[key] = new
+    ledger.update(report_version=2, updated_at=utc_now(), final=progress["finished"],
+                  current_input_policy="mini only; skip confirmed missing minis; stop on other errors",
+                  catalog_check_complete=progress["finished"], summary=progress,
+                  scope="Finalized local runs and recorded preparation observations; pending inputs are not assumed missing.",
+                  issues=[issues[key] for key in sorted(issues)])
+    ledger.pop("additional_check", None)
+    ledger.pop("completed_runs", None)
+    atomic_json(path, ledger)
+    gaps = [i for i in ledger["issues"] if i["status"] in ("skipped", "skip_recorded")]
+    text = ("# Unexpected input-file issues\n\nUpdated: {updated}\n\n"
+            "- Finalized runs: {completed_runs} / {expected_runs}\n"
+            "- Preserved inputs: {processed_inputs}; finalized gaps: {skipped_inputs}\n"
+            "- Pending inputs: {pending_inputs}; expected catalog inputs: {expected_inputs}\n"
+            "- Archive complete without gaps: {complete}; all runs finalized: {finished}\n\n"
+            "Counts use finalized local metadata; monitoring does not repeat artifact hashes.\n"
+            "New work uses minis only. Only confirmed missing minis are skipped; other errors stop the run.\n"
+            "The full expected catalog is unchanged. Exact paths, separate missing/I/O reasons,\n"
+            "retry timestamps, fallback observations and prior observations are in [input-issues.json](input-issues.json).\n"
+            "A finalized run may have recorded gaps; it does not make the archive complete.\n\n"
+            "## Recorded skips\n\n").format(updated=ledger["updated_at"], **progress)
+    text += "\n".join("- `{}` / catalog index {}: {}".format(
+        i["catalog_path"], i["catalog_index"], i["status"]) for i in gaps) + "\n"
+    atomic_text(provenance / "INPUT_ISSUES.md", text)
+    return progress
 
 
 def validate_local_mount(local_root, mount_root, mount_uuid=None):
@@ -1025,9 +1422,15 @@ def validate_local_mount(local_root, mount_root, mount_uuid=None):
     if not mount_root.exists() or not os.path.ismount(str(mount_root)):
         raise ValueError("required local disk is not mounted at {}".format(mount_root))
     if mount_uuid:
-        actual = run_command(["findmnt", "-n", "-o", "UUID", "--target", str(mount_root)]).stdout.strip()
+        actual, filesystem, options = run_command([
+            "findmnt", "-n", "-o", "UUID,FSTYPE,OPTIONS", "--target", str(mount_root)
+        ]).stdout.split()
         if actual != mount_uuid:
             raise ValueError("mounted disk UUID {} differs from required {}".format(actual, mount_uuid))
+        if filesystem == "ntfs3":
+            raise ValueError("unsafe NTFS3 destination: iomap_write_end kernel crashes; use ntfs-3g")
+        if "rw" not in options.split(","):
+            raise ValueError("destination filesystem is not mounted read-write")
     local_root = Path(local_root).resolve()
     try:
         local_root.relative_to(mount_root)
@@ -1051,16 +1454,34 @@ def sync_run(alias, remote_result, local_root, mount_root, mount_uuid=None):
     final.parent.mkdir(parents=True, exist_ok=True)
     incoming = final.with_name(".{}.incoming".format(final.name))
     incoming.mkdir(exist_ok=True)
-    free = shutil.disk_usage(str(local_root)).free
     required = int(remote_result["artifact_bytes"] * 1.05)
-    if free < required:
-        raise ValueError("local disk has {} bytes free; {} required".format(free, required))
     ssh_transport = "ssh " + " ".join(SSH_OPTIONS)
     command = [
-        "rsync", "-rt", "--partial", "--progress", "-e", ssh_transport,
+        "rsync", "-rt", "--partial", "--progress", "--timeout=120", "-e", ssh_transport,
         "{}:{}/".format(alias, remote_result["run_dir"]), str(incoming) + "/",
     ]
-    run_command(command)
+    for attempt in range(3):
+        validate_local_mount(local_root, mount_root, mount_uuid)
+        free = shutil.disk_usage(str(local_root)).free
+        if free < required:
+            raise ValueError("local disk has {} bytes free; {} required".format(free, required))
+        result = run_command(command, check=False)
+        if result.returncode == 0:
+            break
+        error = RuntimeError("rsync failed ({}) for {}:\nstdout:\n{}\nstderr:\n{}".format(
+            result.returncode, incoming, result.stdout, result.stderr))
+        print("{} transfer attempt {}/3: {}".format(utc_now(), attempt + 1, error),
+              file=sys.stderr, flush=True)
+        transport_error = result.returncode in (10, 30, 35) or (
+            result.returncode in (12, 255) and any(message in result.stderr.lower() for message in (
+                "connection unexpectedly closed", "connection reset", "connection timed out",
+                "broken pipe", "connection closed by", "network is unreachable", "no route to host")))
+        storage_error = any(message in result.stderr.lower() for message in (
+            "input/output error", "permission denied", "no space left", "read-only file system",
+            "host key verification failed", "remote host identification has changed"))
+        if attempt == 2 or not transport_error or storage_error:
+            raise error
+        time.sleep((5, 15)[attempt])
     validate_local_mount(local_root, mount_root, mount_uuid)
     verified = verify_local_run(incoming)
     if (verified["catalog_sha256"], verified["schema_version"], verified["ad_selection"],
@@ -1142,8 +1563,10 @@ def command_run(args):
     if args.confirm_start != START_CONFIRMATION:
         raise ValueError("production execution requires --confirm-start {}".format(START_CONFIRMATION))
     if min(args.files_per_job, args.memory_mb, args.max_attempts,
-           args.run_timeout, args.poll_seconds) <= 0:
+           args.run_timeout, args.poll_seconds, args.max_staged_gib) <= 0:
         raise ValueError("job sizing, attempts, timeout, and polling values must be positive")
+    if not 1 <= args.max_jobs <= 300:
+        raise ValueError("--max-jobs must be between 1 and 300")
     if not selected:
         raise ValueError("no runs selected")
     if len(selected) > 1 and not args.delete_remote_after_sync:
@@ -1152,69 +1575,180 @@ def command_run(args):
         raise ValueError("remote deletion requires --confirm-remote-delete {}".format(
             DELETE_CONFIRMATION))
     local_root = validate_local_mount(args.local_root, args.mount_root, args.mount_uuid)
-    save_inventory_snapshot(local_root, records, args.input_source)
+    controller_lock = (local_root / ".controller.lock").open("a")
+    fcntl.flock(controller_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    snapshot = load_json(save_inventory_snapshot(local_root, records, args.input_source, args.skip_missing_minis))
+    refresh_input_issues(local_root)
 
-    for index, record in enumerate(selected, 1):
-        print("[{}/{}] {} {} {}".format(index, len(selected), record["period"],
-                                         record["hall"], record["stem"]), flush=True)
-        local_run = local_root / record["period"] / record["hall"] / record["stem"]
-        if local_run.exists():
-            existing = verify_local_run(local_run)
-            allowed = {"mini", "mini-or-recon"} if args.input_source == "mini-or-recon" else {args.input_source}
-            if ((existing["catalog_sha256"], existing["schema_version"], existing["ad_selection"]) !=
-                    (record["catalog_sha256"], SCHEMA_VERSION, args.ad_selection) or
-                    existing["input_source"] not in allowed):
-                raise ValueError("existing local run does not match the fixed catalog/schema/selection/input source")
-            print("already verified locally; skipping cluster processing", flush=True)
-            continue
-        prepare_args = [
-            "_prepare", "--catalog", record["catalog"], "--period", record["period"],
-            "--hall", record["hall"], "--stage-root", args.remote_stage_root,
-            "--code-root", args.remote_code_root, "--files-per-job", str(args.files_per_job),
-            "--ad-selection", args.ad_selection,
-            "--input-source", args.input_source,
-        ]
-        marker, _ = remote_json(args.alias, args.remote_code_root, prepare_args)
-        if marker.get("reconstruction_fallbacks"):
-            print("recorded exact original recon inputs for {} unavailable minis".format(
-                len(marker["reconstruction_fallbacks"])), flush=True)
-        status, _ = remote_json(args.alias, args.remote_code_root, [
-            "_status", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-        ])
-        attempt = 0
-        while status["state"] != "COMPLETE" and attempt < args.max_attempts:
-            submit_args = [
-                "_submit", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-                "--group", args.group, "--walltime", args.walltime,
-                "--memory-mb", str(args.memory_mb),
-            ]
-            if attempt > 0 or status["state"] == "FAILED":
-                submit_args.append("--resubmit")
-            submission, _ = remote_json(args.alias, args.remote_code_root, submit_args)
-            print("submitted cluster {} attempt {}".format(submission["cluster_id"], attempt + 1),
-                  flush=True)
-            wait_args = [
-                "_wait", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-                "--timeout", str(args.run_timeout), "--poll-seconds", str(args.poll_seconds),
-            ]
-            status, _ = remote_json(args.alias, args.remote_code_root, wait_args, check=False)
-            attempt += 1
-        if status["state"] != "COMPLETE":
-            raise RuntimeError("run failed after {} attempts: {}".format(attempt, status))
-
-        result, _ = remote_json(args.alias, args.remote_code_root, [
-            "_finalize", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-        ])
-        local_result = sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
-        print("verified local files={} bytes={} path={}".format(
-            local_result["files"], local_result["bytes"], local_result["directory"]), flush=True)
-        if args.delete_remote_after_sync:
-            deleted, _ = remote_json(args.alias, args.remote_code_root, [
-                "_cleanup", "--run-dir", marker["run_dir"], "--stage-root", args.remote_stage_root,
-                "--catalog-sha256", marker["catalog_sha256"],
-            ])
-            print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
+    run_pipeline(args, selected, snapshot, local_root)
+    print("campaign accounting: {}".format(json.dumps(refresh_input_issues(local_root))), flush=True)
+    controller_lock.close()
     return 0
+
+
+def run_pipeline(args, selected, snapshot, local_root):
+    def relative(record):
+        return "/".join(record[key] for key in ("period", "hall", "stem"))
+
+    def call(command, marker=None, extra=()):
+        options = [command, "--stage-root", args.remote_stage_root]
+        if marker:
+            options += ["--run-dir", marker["run_dir"]]
+        return remote_json(args.alias, args.remote_code_root, options + list(extra))[0]
+
+    def transfer_run(marker):
+        result = call("_finalize", marker)
+        return sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
+
+    expected = {relative(r): r for r in selected}
+    _, finalized = archive_progress(local_root)
+    done = set()
+    for record in finalized:
+        key = relative(record)
+        if (record["schema_version"] != SCHEMA_VERSION or selection_mode(record["selection"]) != args.ad_selection or
+                input_source_mode(record) not in archive_input_sources(snapshot, key)):
+            raise ValueError("existing local run has a different schema/selection/input source: " + key)
+        done.add(key)
+    # Previously published runs passed hashes before rename. Rehash on cleanup recovery, or via verify-all.
+    state_path = local_root.parent / "provenance/controller.json"
+    transfer, transferring = None, None
+    observed = set()
+    report = dict(max_jobs=args.max_jobs, max_staged_bytes=args.max_staged_gib * GIB)
+    # ponytail: one transfer thread bounds disk/network load; increase only after measured transfer saturation.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            while True:
+                if transfer is not None and transfer.done():
+                    result = transfer.result()  # Any verification/copy failure prevents deletion and further submission.
+                    print("verified local files={} bytes={} path={}".format(
+                        result["files"], result["bytes"], result["directory"]), flush=True)
+                    validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                    refresh_input_issues(local_root)
+                    if args.delete_remote_after_sync:
+                        deleted = call("_cleanup", transferring, ["--catalog-sha256", transferring["catalog_sha256"]])
+                        print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
+                    done.add(relative(transferring))
+                    transfer, transferring = None, None
+
+                pool = call("_pool")
+                if pool["queue"]["outstanding"] > args.max_jobs:
+                    raise RuntimeError("existing scheduler jobs exceed configured cap; no new jobs submitted")
+                if pool["queue"]["held"]:
+                    raise RuntimeError("held campaign jobs: {}".format([j for j in pool["jobs"] if j["JobStatus"] == 5]))
+                active = {}
+                for run in pool["runs"]:
+                    marker = run["marker"]
+                    key = relative(marker)
+                    record = expected.get(key)
+                    if (record is None or marker["catalog_sha256"] != record["catalog_sha256"] or
+                            marker["input_count"] != record["input_count"] or
+                            marker["files_per_job"] != args.files_per_job or
+                            marker["code_root"] != args.remote_code_root or
+                            selection_mode(marker["selection"]) != args.ad_selection or
+                            input_source_mode(marker) != args.input_source or
+                            marker.get("skip_missing_minis", False) != args.skip_missing_minis):
+                        raise ValueError("staged run differs from requested fixed campaign: " + key)
+                    if key not in observed:
+                        paths = parse_catalog_inputs((CATALOG_BACKUP_ROOT / (key + ".list")).read_bytes(), key)
+                        recorded_inputs(paths, marker)
+                        refresh_input_issues(local_root, prepared=marker)
+                        print("adopted {} chunks={} gaps={}".format(key, marker["chunk_count"],
+                              len(marker.get("skipped_inputs", []))), flush=True)
+                        observed.add(key)
+                    if key not in done or args.delete_remote_after_sync:
+                        active[key] = run
+                directories = {r["marker"]["run_dir"] for r in pool["runs"]}
+                if any(j["Iwd"] not in directories for j in pool["jobs"]):
+                    raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
+
+                pending = [r for key, r in expected.items() if key not in done and key not in active]
+                report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
+                              quota=pool["quota"], reserved_bytes=pool["reserved_bytes"],
+                              output_bytes=pool["output_bytes"], staged_runs=len(active),
+                              ready_runs=sum(r["status"]["state"] == "COMPLETE" for r in active.values()),
+                              transferring=relative(transferring) if transferring else None,
+                              pending_runs=len(pending), backpressure=None, error=None)
+                atomic_json(state_path, report)
+                if not active and not pending:
+                    break
+
+                submitted = False
+                for key, run in active.items():
+                    marker, status = run["marker"], run["status"]
+                    own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                    if status["state"] == "COMPLETE" and not own and not status["running"]:
+                        if transfer is None:
+                            transferring = marker
+                            transfer = executor.submit(transfer_run, marker)
+                        continue
+                    expired = False
+                    if run["submissions"]:
+                        elapsed = time.time() - dt.datetime.fromisoformat(run["submissions"][-1]["submitted_at"]).timestamp()
+                        expired = elapsed > args.run_timeout
+                        if expired and own:
+                            raise RuntimeError("run exceeded wait timeout; jobs retained: " + key)
+                    # Scheduler kills before worker startup can leave no .fail or .running file.
+                    retry = not own and (status["state"] == "FAILED" or expired)
+                    if retry and len(run["submissions"]) >= args.max_attempts:
+                        raise RuntimeError("run exhausted submission attempts: " + key)
+                    if run["intent"] or not run["submissions"] or retry:
+                        if pool["queue"]["outstanding"] + marker["chunk_count"] > args.max_jobs:
+                            continue
+                        reason = admission_reason(pool, 0, args.max_jobs, args.max_staged_gib * GIB,
+                                                  shutil.disk_usage(local_root).free)
+                        if reason:
+                            report["backpressure"] = reason
+                            continue
+                        extra = ["--group", args.group, "--walltime", args.walltime,
+                                 "--memory-mb", str(args.memory_mb), "--max-jobs", str(args.max_jobs)]
+                        if retry:
+                            extra.append("--resubmit")
+                            if expired:
+                                print("retrying expired incomplete run {}; no scheduler jobs remain; "
+                                      "verified chunks retained".format(key), flush=True)
+                        submission = call("_submit", marker, extra)
+                        print("submitted/adopted {} cluster {}".format(key, submission["cluster_id"]), flush=True)
+                        submitted = True
+                        break  # Refresh real queue counts before another submission.
+                if submitted:
+                    continue
+                if any(r["status"]["failed"] for r in active.values()):
+                    raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
+                if report["backpressure"] and not pool["jobs"] and transfer is None:
+                    raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
+                if pending:
+                    record = pending[0]
+                    chunks = math.ceil(record["input_count"] / args.files_per_job)
+                    reason = admission_reason(pool, chunks, args.max_jobs, args.max_staged_gib * GIB,
+                                              shutil.disk_usage(local_root).free)
+                    report["backpressure"] = reason
+                    if not reason:
+                        validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                        options = ["--catalog", record["catalog"], "--period", record["period"],
+                                   "--hall", record["hall"], "--code-root", args.remote_code_root,
+                                   "--files-per-job", str(args.files_per_job), "--ad-selection", args.ad_selection,
+                                   "--input-source", args.input_source]
+                        if args.skip_missing_minis:
+                            options.append("--skip-missing-minis")
+                        call("_prepare", extra=options)
+                        continue
+                    if not active:
+                        raise RuntimeError("cannot admit next run: " + reason)
+                atomic_json(state_path, report)
+                time.sleep(args.poll_seconds)
+        except BaseException as error:
+            report.update(checked_at=utc_now(), heartbeat_time=time.time(), error=str(error))
+            atomic_json(state_path, report)
+            if transfer is not None:
+                try:
+                    # The executor already waits on exit. Account for a published copy, retaining staging.
+                    transfer.result()
+                    validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                    refresh_input_issues(local_root)
+                except Exception as transfer_error:
+                    report["transfer_error"] = str(transfer_error)
+                    atomic_json(state_path, report)
+            raise
 
 
 def add_connection_options(parser):
@@ -1236,7 +1770,7 @@ def build_parser():
     inventory.add_argument("--json", action="store_true")
     inventory.set_defaults(function=command_inventory)
 
-    run = commands.add_parser("run", help="process, sync, verify, and optionally clean one run at a time")
+    run = commands.add_parser("run", help="process concurrent runs with bounded jobs and staging")
     add_connection_options(run)
     run.add_argument("--remote-stage-root", default=DEFAULT_STAGE_ROOT)
     run.add_argument("--local-root", required=True)
@@ -1250,6 +1784,8 @@ def build_parser():
     run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,
                      help="mini (default): All-mini; recon: fixed originals; mini-or-recon: "
                           "explicitly record exact originals for unavailable minis")
+    run.add_argument("--skip-missing-minis", action="store_true",
+                     help="record and skip confirmed missing minis; stop on other errors or suspected outages")
     run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off",
                      help="on: keep AD entries above 0.6 MeV plus every other detector; "
                           "off (default): keep every entry (band counts are still recorded)")
@@ -1259,6 +1795,8 @@ def build_parser():
     run.add_argument("--max-attempts", type=int, default=2)
     run.add_argument("--run-timeout", type=int, default=7200)
     run.add_argument("--poll-seconds", type=int, default=15)
+    run.add_argument("--max-jobs", type=int, default=300, help="cap all outstanding compression jobs (1-300)")
+    run.add_argument("--max-staged-gib", type=int, default=400, help="staging admission budget; reserve 1 GiB per chunk")
     run.add_argument("--execute", action="store_true")
     run.add_argument("--confirm-start")
     run.add_argument("--delete-remote-after-sync", action="store_true")
@@ -1276,8 +1814,11 @@ def build_parser():
     verify_everything.add_argument("local_root")
     verify_everything.add_argument(
         "--root-verifier", help="optional slim-root binary for structural checks")
-    verify_everything.set_defaults(function=lambda args: print(json.dumps(verify_all(
-        args.local_root, root_verifier=args.root_verifier), sort_keys=True)) or 0)
+    def verify_all_function(args):
+        result = verify_all(args.local_root, root_verifier=args.root_verifier)
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["complete"] else 2
+    verify_everything.set_defaults(function=verify_all_function)
 
     verify_backups = commands.add_parser(
         "verify-catalog-backups", help="verify the complete fixed run-catalog snapshot")
@@ -1296,9 +1837,11 @@ def build_parser():
     prepare.add_argument("--files-per-job", type=int, required=True)
     prepare.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off")
     prepare.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE)
+    prepare.add_argument("--skip-missing-minis", action="store_true")
     prepare.set_defaults(function=lambda args: print(json.dumps(prepare_run(
         args.catalog, args.period, args.hall, args.stage_root, args.code_root,
-        args.files_per_job, ad_selection=args.ad_selection, input_source=args.input_source))) or 0)
+        args.files_per_job, ad_selection=args.ad_selection, input_source=args.input_source,
+        skip_missing_minis=args.skip_missing_minis))) or 0)
 
     submit = commands.add_parser("_submit")
     submit.add_argument("--run-dir", required=True)
@@ -1307,9 +1850,14 @@ def build_parser():
     submit.add_argument("--walltime", required=True)
     submit.add_argument("--memory-mb", type=int, required=True)
     submit.add_argument("--resubmit", action="store_true")
+    submit.add_argument("--max-jobs", type=int, default=300)
     submit.set_defaults(function=lambda args: print(json.dumps(submit_run(
         args.run_dir, args.stage_root, args.group, args.walltime, args.memory_mb,
-        args.resubmit))) or 0)
+        args.resubmit, args.max_jobs))) or 0)
+
+    pool = commands.add_parser("_pool")
+    pool.add_argument("--stage-root", required=True)
+    pool.set_defaults(function=lambda args: print(json.dumps(pool_status(args.stage_root))) or 0)
 
     status = commands.add_parser("_status")
     status.add_argument("--run-dir", required=True)
@@ -1355,7 +1903,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         return args.function(args)
-    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError, subprocess.TimeoutExpired) as error:
         print("ERROR: {}".format(error), file=sys.stderr)
         return 1
 

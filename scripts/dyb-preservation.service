@@ -1,0 +1,9 @@
+[Unit]
+Description=Daya Bay preservation to portable disk
+
+[Service]
+Type=exec
+WorkingDirectory=%h/WORK/Science/Dayabay-work/DYB_DATA_PRESERVATION
+ExecStart=/usr/bin/systemd-inhibit --what=sleep --mode=block --why=Daya-Bay-data-preservation /usr/bin/bash %h/WORK/Science/Dayabay-work/DYB_DATA_PRESERVATION/scripts/run_campaign.sh
+StandardOutput=append:%h/WORK/Science/Dayabay-work/DYB_DATA_PRESERVATION/build/campaign.log
+StandardError=append:%h/WORK/Science/Dayabay-work/DYB_DATA_PRESERVATION/build/campaign.log

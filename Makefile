@@ -18,7 +18,7 @@ check:
 	$(PYTHON) estimates/energy-threshold-2026-09-29/benchmark.py check
 	$(PYTHON) preserve.py verify-catalog-backups
 	bash -n scripts/build_remote.sh scripts/worker.sh plots/residual_flasher/collect.sh
-	bash -n scripts/run_campaign.sh
+	bash -n scripts/run_campaign.sh scripts/recover_campaign_disk.sh
 	bash -n estimates/mini-branches-2026-09-27/compare-original.sh
 	bash -n estimates/noenergy-2026-09-27/run.sh
 	bash -n estimates/energy-threshold-2026-09-29/run.sh
