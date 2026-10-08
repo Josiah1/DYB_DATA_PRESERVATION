@@ -100,7 +100,7 @@ def main():
                 report["alert"] = "Cannot save progress on destination disk: " + str(error)
         preserve.atomic_json(state_path, report)
     print(json.dumps({key: value for key, value in report.items() if key != "log_tail"}, sort_keys=True))
-    return 1 if report.get("alert") or report.get("notification_error") else 0
+    return 1 if report.get("alert") else 0
 
 
 if __name__ == "__main__":

@@ -241,6 +241,9 @@ new verified output; critical alerts repeat every 30 minutes while unresolved.
 Desktop notification delivery is bounded to ten seconds. Delivery failure is
 recorded separately as `notification_error` in both reports and the journal;
 the original campaign alert is retained, and the next timer check retries delivery.
+The checker exits unsuccessfully for campaign alerts. Optional desktop delivery
+failure alone does not fail a healthy check; headless sessions retain reports and
+the journal but cannot display desktop notices until a notification service returns.
 The monitor never starts a second controller or changes data. Inspect failures
 with `journalctl --user -u dyb-preservation-check.service` and `build/campaign.log`.
 
