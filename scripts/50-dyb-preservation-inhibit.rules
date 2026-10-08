@@ -1,0 +1,6 @@
+// The campaign must inhibit sleep before a graphical login exists.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.login1.inhibit-block-sleep" && subject.user == "josiah") {
+        return polkit.Result.YES;
+    }
+});

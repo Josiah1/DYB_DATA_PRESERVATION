@@ -2,6 +2,7 @@ import hashlib
 import errno
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -10,6 +11,19 @@ import preserve
 
 
 class PreserveTests(unittest.TestCase):
+    def test_disk_recovery_requires_current_mount_path_and_a_new_boot(self):
+        script = Path(preserve.__file__).parent / 'scripts/recover_campaign_disk.sh'
+        boot = Path('/proc/sys/kernel/random/boot_id')
+        if not boot.exists():
+            self.skipTest('Linux boot guard')
+        for arguments, reason in (([], 'usage:'),
+                (['old-boot', '220', 'P17B/EH1/run37942', 'relative'], 'absolute mount path'),
+                (['old-boot', '220', 'P17B/EH1/run37942', '/'], 'absolute mount path'),
+                ([boot.read_text().strip(), '220', 'P17B/EH1/run37942', '/media/current disk'], 'old kernel')):
+            result = subprocess.run(['bash', str(script)] + arguments, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(reason, result.stderr)
+
     def test_missing_minis_are_gaps_but_io_permissions_and_outages_stop(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

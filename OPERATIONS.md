@@ -88,15 +88,39 @@ missing-mini ledger entries.
 
 `scripts/dyb-preservation.service` provides the same single controller as a
 persistent user unit (no automatic restart on errors). The one-shot
-`scripts/recover_campaign_disk.sh OLD_BOOT_ID BASELINE_RUNS LAST_VERIFIED_RUN`
+`scripts/recover_campaign_disk.sh OLD_BOOT_ID BASELINE_RUNS LAST_VERIFIED_RUN MOUNT_ROOT`
 is for a root service after the required reboot. It refuses the old boot or
 an existing mount, performs the read-only filesystem check, mounts with
-ntfs-3g and `norecover`, rechecks the saved-run baseline and hashes the last
+ntfs-3g and `norecover` in a separate systemd mount unit, rechecks the saved-run baseline and hashes the last
 verified run, then starts the user controller and timer. It waits up to 20
 minutes for a new verified save and reconciled ledger, rechecks that save's
 hashes and the live scheduler/budget, and writes
 `build/reboot-recovery-result.json`. A failure leaves an explicit journal
 error; it never forces the filesystem, clears flags or starts another controller.
+
+The October 7 boot exposed two startup problems: login1 denied the lingering
+user's sleep inhibitor before a desktop login, and the failed recovery service
+killed its own ntfs-3g daemon. The desktop then mounted the disk with NTFS3.
+The recovery helper now requires the freshly inspected mount path and gives
+the mount its own systemd unit, so a controller/recovery error cannot kill it.
+Its verification query explicitly uses the campaign's scratchfs2 roots.
+Install `scripts/50-dyb-preservation-inhibit.rules` as root, mode 0644, under
+`/etc/polkit-1/rules.d/`. It permits only user `josiah` to inhibit sleep;
+the controller still fails if it cannot obtain that inhibitor.
+
+On October 8 the inspected mount path was `/media/josiah/LAYJ萤捷`, without
+the former trailing `1`. After stopping checker/controller writes, a normal
+unmount and successful `ntfsfix --no-action` check, pin this UUID to ntfs-3g
+in `/etc/fstab` so desktop automount cannot select NTFS3 again:
+
+```text
+UUID=2A4F48F8BDFEE355 /media/josiah/LAYJ萤捷 ntfs-3g rw,norecover,nosuid,nodev,uid=1000,gid=1000,umask=0022,nofail,x-systemd.device-timeout=15s 0 0
+```
+
+Reload systemd and start the corresponding mount unit. Verify the exact UUID,
+`fuseblk`, writable mode and last saved run's hashes before starting one user
+controller. Disable the obsolete one-shot reboot recovery service after the
+recovery; it must not run on every boot against an already mounted volume.
 
 ## Single-disk campaign, 2026-09-29
 
