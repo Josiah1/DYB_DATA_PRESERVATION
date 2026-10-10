@@ -300,7 +300,7 @@ class PipelineTests(unittest.TestCase):
             local.mkdir()
             (root / 'provenance').mkdir()
             records, staged = [], {}
-            for number in (10001, 10002, 10003):
+            for number in (10001, 10002, 10003, 10004):
                 record = dict(period='P17B', hall='EH1', stem='run' + str(number),
                               catalog='/catalog/run{}.list'.format(number), catalog_sha256=str(number), input_count=2)
                 records.append(record)
@@ -312,14 +312,16 @@ class PipelineTests(unittest.TestCase):
                               input_source='mini', skip_missing_minis=True)
                 staged[record['stem']] = dict(marker=marker, intent=False,
                     submissions=[dict(cluster_id=number, submitted_at='2000-01-01T00:00:00+00:00')],
-                    status=dict(state='FAILED' if number == 10001 else 'PENDING' if number == 10002 else 'COMPLETE',
-                                ok=1 if number != 10003 else 2, failed=int(number == 10001), running=0, chunks=2))
-            held_before = copy.deepcopy(staged['run10001'])
+                    status=dict(state='FAILED' if number in (10001, 10004) else 'PENDING' if number == 10002 else 'COMPLETE',
+                                ok=1 if number != 10003 else 2, failed=int(number in (10001, 10004)), running=0, chunks=2))
+            records.append(dict(records[-1], stem='run10005', catalog='/catalog/run10005.list', catalog_sha256='10005'))
+            held_before = {stem: copy.deepcopy(staged[stem]) for stem in ('run10001', 'run10004')}
             args = preserve.build_parser().parse_args([
                 'run', '--local-root', str(local), '--mount-root', str(root),
                 '--remote-stage-root', '/stage', '--remote-code-root', '/code',
                 '--files-per-job', '1', '--skip-missing-minis', '--ad-selection', 'on',
-                '--delete-remote-after-sync', '--hold-run', 'P17B/EH1/run10001'])
+                '--delete-remote-after-sync', '--hold-run', 'P17B/EH1/run10001',
+                '--hold-run', 'P17B/EH1/run10004', '--drain-staging'])
             args.poll_seconds = 0.001
             submitted, verified, cleaned = [], set(), []
 
@@ -330,7 +332,7 @@ class PipelineTests(unittest.TestCase):
                         reserved_bytes=3 * preserve.GIB, output_bytes=10,
                         quota=dict(free_bytes=500 * preserve.GIB, used_files=10, limit_files=200000))), 0
                 stem = Path(arguments[arguments.index('--run-dir') + 1]).name
-                self.assertNotEqual(stem, 'run10001', 'held chunks and failure evidence must not be mutated')
+                self.assertNotIn(stem, held_before, 'held chunks and failure evidence must not be mutated')
                 if command == '_submit':
                     self.assertEqual(stem, 'run10002')
                     self.assertIn('--resubmit', arguments)
@@ -358,14 +360,16 @@ class PipelineTests(unittest.TestCase):
                     preserve.run_pipeline(args, records, {}, local)
             self.assertEqual(submitted, ['run10002'])
             self.assertEqual(set(cleaned), {'run10002', 'run10003'})
-            self.assertEqual(staged['run10001'], held_before)
+            self.assertEqual(staged, held_before)
             state = preserve.load_json(root / 'provenance/controller.json')
             self.assertEqual(state['held_runs'][0]['run'], 'P17B/EH1/run10001')
             self.assertEqual(state['held_runs'][0]['status']['ok'], 1)
+            self.assertFalse(state['new_run_admission'])
+            self.assertEqual(state['pending_runs'], 1, 'drain mode retains unadmitted catalog runs')
             # Holding staging never adds a completed local run or a missing-file skip.
             preserve.atomic_json(local / 'catalog-inventory.json', dict(records=records))
             progress, saved = preserve.archive_progress(local)
-            self.assertEqual((progress['expected_runs'], progress['expected_inputs'], progress['pending_inputs']), (3, 6, 6))
+            self.assertEqual((progress['expected_runs'], progress['expected_inputs'], progress['pending_inputs']), (5, 10, 10))
             self.assertEqual((progress['completed_runs'], progress['skipped_inputs'], saved), (0, 0, []))
             self.assertFalse(progress['complete'])
 
@@ -373,8 +377,8 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'outside the selected fixed catalog'):
                 preserve.run_pipeline(args, records, {}, local)
             args.hold_run = ['P17B/EH1/run10001']
-            job = dict(Iwd=held_before['marker']['run_dir'], JobStatus=2, RequestCpus=1)
-            pool = dict(runs=[held_before], jobs=[job], queue=preserve.queue_counts([job]),
+            job = dict(Iwd=held_before['run10001']['marker']['run_dir'], JobStatus=2, RequestCpus=1)
+            pool = dict(runs=[held_before['run10001']], jobs=[job], queue=preserve.queue_counts([job]),
                         quota={}, reserved_bytes=preserve.GIB, output_bytes=10)
             with mock.patch('preserve.remote_json', return_value=(pool, 0)) as call, \
                     mock.patch('preserve.CATALOG_BACKUP_ROOT', root / 'catalogs'), \
