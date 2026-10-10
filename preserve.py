@@ -1675,15 +1675,14 @@ def run_pipeline(args, selected, snapshot, local_root):
                               ready_runs=sum(r["status"]["state"] == "COMPLETE" for r in active.values()),
                               transferring=relative(transferring) if transferring else None,
                               pending_runs=len(pending), backpressure=None, error=None,
+                              new_run_admission=not args.drain_staging,
                               held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
                                               status=active[key]["status"],
                                               reason="operator hold for existing mini content errors; inputs remain pending")
                                          for key in sorted(held)])
                 atomic_json(state_path, report)
-                if not active and not pending:
+                if not active and (not pending or args.drain_staging):
                     break
-                if active.keys() == held and not pending:
-                    raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
 
                 submitted = False
                 for key, run in active.items():
@@ -1731,11 +1730,13 @@ def run_pipeline(args, selected, snapshot, local_root):
                         break  # Refresh real queue counts before another submission.
                 if submitted:
                     continue
+                if active.keys() == held and (not pending or args.drain_staging):
+                    raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
                 if any(r["status"]["failed"] for key, r in active.items() if key not in held):
                     raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
                 if report["backpressure"] and not pool["jobs"] and transfer is None:
                     raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
-                if pending:
+                if pending and not args.drain_staging:
                     record = pending[0]
                     chunks = math.ceil(record["input_count"] / args.files_per_job)
                     reason = admission_reason(pool, chunks, args.max_jobs, args.max_staged_gib * GIB,
@@ -1800,6 +1801,8 @@ def build_parser():
     run.add_argument("--run-pattern")
     run.add_argument("--hold-run", action="append", default=[], metavar="PERIOD/HALL/RUN",
                      help="retain an incomplete staged run for input repair; never submit, finalize, or clean it")
+    run.add_argument("--drain-staging", action="store_true",
+                     help="finish retained staging without preparing new catalog runs; expected inputs remain pending")
     run.add_argument("--limit-runs", type=int)
     run.add_argument("--files-per-job", type=int, default=16)
     run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,

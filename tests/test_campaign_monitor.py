@@ -80,10 +80,11 @@ class CampaignMonitorTests(unittest.TestCase):
         progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=2, skipped_inputs=0)
         service = dict(ActiveState='active', InvocationID='one')
         controller = dict(heartbeat_time=100, max_jobs=300, max_staged_bytes=400,
-                          held_runs=[dict(run='P17B/EH1/run51237')], queue=dict(held=0))
+                          held_runs=[dict(run='P17B/EH1/run51237')], queue=dict(held=0), new_run_admission=False)
         report = status_record(progress, service, {}, 100, controller)
         self.assertIsNone(report['alert'])
         self.assertIn('run51237', report['warning'])
+        self.assertIn('admission paused', report['warning'])
         self.assertEqual((report['pending_inputs'], report['skipped_inputs'], report['complete']), (2, 0, False))
         controller['queue']['held'] = 1
         self.assertIn('held by the scheduler', status_record(progress, service, {}, 100, controller)['alert'])
