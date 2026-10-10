@@ -1601,6 +1601,9 @@ def run_pipeline(args, selected, snapshot, local_root):
         return sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
 
     expected = {relative(r): r for r in selected}
+    held = set(args.hold_run)
+    if held - set(expected):
+        raise ValueError("held run is outside the selected fixed catalog: " + ", ".join(sorted(held - set(expected))))
     _, finalized = archive_progress(local_root)
     done = set()
     for record in finalized:
@@ -1609,6 +1612,8 @@ def run_pipeline(args, selected, snapshot, local_root):
                 input_source_mode(record) not in archive_input_sources(snapshot, key)):
             raise ValueError("existing local run has a different schema/selection/input source: " + key)
         done.add(key)
+    if held & done:
+        raise ValueError("cannot hold an already verified local run: " + ", ".join(sorted(held & done)))
     # Previously published runs passed hashes before rename. Rehash on cleanup recovery, or via verify-all.
     state_path = local_root.parent / "provenance/controller.json"
     transfer, transferring = None, None
@@ -1660,6 +1665,8 @@ def run_pipeline(args, selected, snapshot, local_root):
                 directories = {r["marker"]["run_dir"] for r in pool["runs"]}
                 if any(j["Iwd"] not in directories for j in pool["jobs"]):
                     raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
+                if held - set(active):
+                    raise RuntimeError("held run has no retained staging: " + ", ".join(sorted(held - set(active))))
 
                 pending = [r for key, r in expected.items() if key not in done and key not in active]
                 report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
@@ -1667,15 +1674,27 @@ def run_pipeline(args, selected, snapshot, local_root):
                               output_bytes=pool["output_bytes"], staged_runs=len(active),
                               ready_runs=sum(r["status"]["state"] == "COMPLETE" for r in active.values()),
                               transferring=relative(transferring) if transferring else None,
-                              pending_runs=len(pending), backpressure=None, error=None)
+                              pending_runs=len(pending), backpressure=None, error=None,
+                              held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
+                                              status=active[key]["status"],
+                                              reason="operator hold for existing mini content errors; inputs remain pending")
+                                         for key in sorted(held)])
                 atomic_json(state_path, report)
                 if not active and not pending:
                     break
+                if active.keys() == held and not pending:
+                    raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
 
                 submitted = False
                 for key, run in active.items():
                     marker, status = run["marker"], run["status"]
                     own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                    if key in held:
+                        if own or status["running"]:
+                            raise RuntimeError("held run still has scheduler jobs or worker markers: " + key)
+                        if status["state"] == "COMPLETE":
+                            raise RuntimeError("held run is now complete; inspect before releasing hold: " + key)
+                        continue
                     if status["state"] == "COMPLETE" and not own and not status["running"]:
                         if transfer is None:
                             transferring = marker
@@ -1712,7 +1731,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                         break  # Refresh real queue counts before another submission.
                 if submitted:
                     continue
-                if any(r["status"]["failed"] for r in active.values()):
+                if any(r["status"]["failed"] for key, r in active.items() if key not in held):
                     raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
                 if report["backpressure"] and not pool["jobs"] and transfer is None:
                     raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
@@ -1779,6 +1798,8 @@ def build_parser():
     run.add_argument("--period", action="append", choices=[item[0] for item in CATALOGS])
     run.add_argument("--hall", action="append", choices=("EH1", "EH2", "EH3"))
     run.add_argument("--run-pattern")
+    run.add_argument("--hold-run", action="append", default=[], metavar="PERIOD/HALL/RUN",
+                     help="retain an incomplete staged run for input repair; never submit, finalize, or clean it")
     run.add_argument("--limit-runs", type=int)
     run.add_argument("--files-per-job", type=int, default=16)
     run.add_argument("--input-source", choices=INPUT_SOURCES, default=DEFAULT_INPUT_SOURCE,

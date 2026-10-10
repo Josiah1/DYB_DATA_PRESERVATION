@@ -75,3 +75,17 @@ class CampaignMonitorTests(unittest.TestCase):
         self.assertIn('held', status_record(progress, service, {}, 100, controller)['alert'])
         controller['error'] = 'checksum mismatch'
         self.assertIn('checksum mismatch', status_record(progress, service, {}, 100, controller)['alert'])
+
+    def test_known_input_hold_warns_without_hiding_service_or_scheduler_failure(self):
+        progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=2, skipped_inputs=0)
+        service = dict(ActiveState='active', InvocationID='one')
+        controller = dict(heartbeat_time=100, max_jobs=300, max_staged_bytes=400,
+                          held_runs=[dict(run='P17B/EH1/run51237')], queue=dict(held=0))
+        report = status_record(progress, service, {}, 100, controller)
+        self.assertIsNone(report['alert'])
+        self.assertIn('run51237', report['warning'])
+        self.assertEqual((report['pending_inputs'], report['skipped_inputs'], report['complete']), (2, 0, False))
+        controller['queue']['held'] = 1
+        self.assertIn('held by the scheduler', status_record(progress, service, {}, 100, controller)['alert'])
+        service['ActiveState'] = 'failed'
+        self.assertIn('failed', status_record(progress, service, {}, 100, controller)['alert'])
