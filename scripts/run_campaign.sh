@@ -16,6 +16,6 @@ exec "$PYTHON" -u "$PROJECT_ROOT/preserve.py" run \
   --max-jobs 300 --max-staged-gib 400 \
   --hold-run P17B/EH1/run51237 \
   --hold-run P17B/EH1/run51243 --hold-run P17B/EH1/run51250 \
-  --drain-staging \
+  --hold-empty-minis \
   --execute --confirm-start START-DYB-PRESERVATION \
   --delete-remote-after-sync --confirm-remote-delete DELETE-VERIFIED-RUN "$@"

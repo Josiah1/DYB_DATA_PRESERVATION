@@ -187,14 +187,26 @@ staging and failure evidence, forbid submission/finalization/cleanup of those
 runs, and leave their inputs pending in
 the full expected catalog while unaffected work continues. Controller and
 five-minute reports show the hold separately from missing-mini skips and
-service errors. New-run admission is paused with `--drain-staging` after a
-bounded check found the same content problem in later runs. Retained usable
-staging continues through verification, transfer, and guarded cleanup; no
-future catalog run is removed or counted complete. Exact input evidence is on the portable disk under
+service errors. New-run admission is enabled. With `--hold-empty-minis`, a
+failed chunk is eligible for a pending run hold only when its exact worker
+error names a mini in that fixed chunk and an independent ROOT read confirms
+the file contains only a zero-entry `AdEnergy` TNtuple. Every failed chunk must
+pass this check; operational, I/O, permission, corruption and unrecognized
+errors still stop the controller. Existing workers on an automatically held
+run may finish their other chunks, which remain preserved. These inputs are
+not skipped; the run remains incomplete and consumes staging reservation.
+Unchanged failure signatures reuse the proof; new failures require another
+inspection. Holds persist across restarts.
+If workers publish another failure during inspection, defer that run and
+recheck a fresh snapshot, up to eight times; this does not defer operational
+or unknown errors. Retained usable staging continues
+through verification, transfer, and guarded cleanup. Exact input evidence is on the portable disk under
 `provenance/pending-input-issues.json`. Release the hold in
 `scripts/run_campaign.sh` only after the expected All-mini inputs are repaired
-and checked. Remove `--drain-staging` after resolving the wider input-content
-blocker; never substitute originals or mark these existing files missing.
+and checked. Automatically recorded holds also require inspecting and releasing
+their pending ledger entry after repair. `--drain-staging` remains available
+for an explicit transfer-only operation; never substitute originals or mark
+these existing files missing.
 
 ## Verification commands
 

@@ -778,7 +778,7 @@ def run_status(run_dir, stage_root):
         state = "RUNNING"
     else:
         state = "PENDING"
-    return {
+    result = {
         "state": state,
         "ok": len(ok),
         "failed": len(failed),
@@ -786,6 +786,62 @@ def run_status(run_dir, stage_root):
         "chunks": marker["chunk_count"],
         "run_dir": str(run_dir),
     }
+    if failed:
+        result["failure_updates"] = {
+            path.stem: [path.stat().st_mtime_ns,
+                        (run_dir / "logs" / (path.stem + ".err")).stat().st_mtime_ns
+                        if (run_dir / "logs" / (path.stem + ".err")).is_file() else None]
+            for path in failed}
+    return result
+
+
+def confirmed_empty_mini_errors(run_dir, stage_root):
+    run_dir, marker = load_run(run_dir, stage_root)
+    if input_source_mode(marker) != "mini":
+        raise ValueError("empty-mini holds require mini-only inputs")
+    before = run_status(run_dir, stage_root)
+    if not before["failed"]:
+        raise ValueError("run has no failed chunks to inspect")
+    catalog = run_dir / "catalog.list"
+    if sha256_file(catalog) != marker["catalog_sha256"]:
+        raise ValueError("content-error catalog checksum mismatch")
+    paths = parse_catalog_inputs(catalog.read_bytes(), str(catalog))
+    usable = recorded_inputs(paths, marker)
+    minis = resolve_inputs(paths, "mini")
+    candidates = []
+    for chunk in sorted(before["failure_updates"]):
+        failure = (run_dir / "status" / (chunk + ".fail")).read_text()
+        error = run_dir / "logs" / (chunk + ".err")
+        if error.stat().st_size > 4096:
+            raise RuntimeError("unrecognized worker failure; not holding " + str(error))
+        match = re.fullmatch(r"ERROR missing required tree: (/[^\s]+\.root)\s*", error.read_text())
+        if not match or "rc=1" not in failure.splitlines():
+            raise RuntimeError("unrecognized worker failure; not holding " + str(error))
+        mini = match.group(1)
+        inputs = (run_dir / "chunks" / (chunk + ".list")).read_text().splitlines()
+        if mini not in inputs or mini not in usable or mini not in minis:
+            raise ValueError("content-error path does not match this fixed mini chunk")
+        candidates.append((chunk, minis.index(mini)))
+    probe = run_command(["/usr/bin/bash", str(Path(marker["code_root"]) / "scripts/check_empty_mini.sh")] +
+                        [minis[index] for _, index in candidates])
+    if probe.stderr.strip():
+        raise RuntimeError("ROOT inspection reported errors; not holding: " + probe.stderr)
+    issues = json.loads(probe.stdout)
+    if len(issues) != len(candidates):
+        raise ValueError("incomplete content-error inspection")
+    for issue, (chunk, index) in zip(issues, candidates):
+        if (issue["path"] != minis[index] or
+                issue["keys"] != [dict(name="AdEnergy", classname="TNtuple", entries=0)] or
+                issue["required"] != {"Event/Rec/AdSimpleNL": False, "Event/Data/CalibStats": False}):
+            raise ValueError("input was not confirmed as an empty AdEnergy-only mini")
+        issue.update(period=marker["period"], hall=marker["hall"], run=marker["stem"],
+                     catalog=marker["catalog"], catalog_sha256=marker["catalog_sha256"],
+                     catalog_index=index, catalog_entry=paths[index], chunk=chunk,
+                     category="content_error", status="pending", reason="existing mini contains only empty AdEnergy tuple")
+    after = run_status(run_dir, stage_root)
+    if after.get("failure_updates") != before["failure_updates"]:
+        return dict(recheck=True, failure_updates=after.get("failure_updates"))
+    return dict(issues=issues, failure_updates=before["failure_updates"])
 
 
 def parse_result_file(path):
@@ -1355,6 +1411,33 @@ def archive_progress(local_root):
                 complete=finished and not skipped), runs
 
 
+def refresh_pending_holds(local_root, held, active, automatic, new_run_admission):
+    path = Path(local_root).parent / "provenance/pending-input-issues.json"
+    ledger = load_json(path) if path.exists() else {"kind": "dyb-pending-input-issues"}
+    previous = {entry["run"]: entry for entry in ledger.get("held_runs", [])}
+    issues = {(i["period"], i["hall"], i["run"], i["catalog_index"]): i
+              for i in ledger.get("issues", [])}
+    entries = []
+    for key in sorted(held):
+        run = active[key]
+        marker = run["marker"]
+        entry = dict(previous.get(key, {}))
+        entry.update(run=key, catalog=marker["catalog"], catalog_sha256=marker["catalog_sha256"],
+                     input_count=marker["input_count"], pending_input_count=marker["input_count"],
+                     status=run["status"], automatic=key in automatic or entry.get("automatic", False))
+        entries.append(entry)
+        for issue in automatic.get(key, {}).get("issues", []):
+            identity = (issue["period"], issue["hall"], issue["run"], issue["catalog_index"])
+            issues.setdefault(identity, issue)
+    updated = dict(ledger, held_runs=entries, issues=[issues[k] for k in sorted(issues)],
+                   status="pending", new_run_admission=new_run_admission,
+                   new_run_admission_reason="unaffected compression enabled; content-error runs remain pending"
+                   if new_run_admission else "operator requested staging drain")
+    if updated != ledger:
+        updated["updated_at"] = utc_now()
+        atomic_json(path, updated)
+
+
 def refresh_input_issues(local_root, prepared=None):
     local_root = Path(local_root)
     progress, runs = archive_progress(local_root)
@@ -1601,7 +1684,15 @@ def run_pipeline(args, selected, snapshot, local_root):
         return sync_run(args.alias, result, local_root, args.mount_root, args.mount_uuid)
 
     expected = {relative(r): r for r in selected}
-    held = set(args.hold_run)
+    explicit_holds = set(args.hold_run)
+    automatic = {}
+    content_rechecks = {}
+    pending_path = local_root.parent / "provenance/pending-input-issues.json"
+    recorded_holds = {entry["run"] for entry in load_json(pending_path).get("held_runs", [])
+                      if entry.get("automatic")} if args.hold_empty_minis and pending_path.exists() else set()
+    held = explicit_holds | recorded_holds
+    if args.hold_empty_minis and args.input_source != "mini":
+        raise ValueError("empty-mini holds require mini-only inputs")
     if held - set(expected):
         raise ValueError("held run is outside the selected fixed catalog: " + ", ".join(sorted(held - set(expected))))
     _, finalized = archive_progress(local_root)
@@ -1641,6 +1732,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                 if pool["queue"]["held"]:
                     raise RuntimeError("held campaign jobs: {}".format([j for j in pool["jobs"] if j["JobStatus"] == 5]))
                 active = {}
+                rechecking = set()
                 for run in pool["runs"]:
                     marker = run["marker"]
                     key = relative(marker)
@@ -1662,11 +1754,31 @@ def run_pipeline(args, selected, snapshot, local_root):
                         observed.add(key)
                     if key not in done or args.delete_remote_after_sync:
                         active[key] = run
+                    if args.hold_empty_minis and key not in explicit_holds and run["status"]["failed"]:
+                        signature = run["status"]["failure_updates"]
+                        if automatic.get(key, {}).get("failure_updates") != signature:
+                            proof = call("_content_errors", marker)
+                            if proof.get("recheck") or proof["failure_updates"] != signature:
+                                # Other workers may publish failures during the read-only ROOT inspection.
+                                content_rechecks[key] = content_rechecks.get(key, 0) + 1
+                                if content_rechecks[key] > 8:
+                                    raise RuntimeError("content-error snapshot did not settle after 8 rechecks; run retained: " + key)
+                                rechecking.add(key)
+                                continue
+                            if len(proof["issues"]) != run["status"]["failed"]:
+                                raise RuntimeError("incomplete content-error proof: " + key)
+                            content_rechecks.pop(key, None)
+                            automatic[key] = proof
+                            print("holding {} pending; confirmed empty-mini errors={}".format(
+                                key, len(proof["issues"])), flush=True)
+                held = explicit_holds | recorded_holds | set(automatic)
                 directories = {r["marker"]["run_dir"] for r in pool["runs"]}
                 if any(j["Iwd"] not in directories for j in pool["jobs"]):
                     raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
                 if held - set(active):
                     raise RuntimeError("held run has no retained staging: " + ", ".join(sorted(held - set(active))))
+                if held:
+                    refresh_pending_holds(local_root, held, active, automatic, not args.drain_staging)
 
                 pending = [r for key, r in expected.items() if key not in done and key not in active]
                 report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
@@ -1676,6 +1788,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                               transferring=relative(transferring) if transferring else None,
                               pending_runs=len(pending), backpressure=None, error=None,
                               new_run_admission=not args.drain_staging,
+                              pending_content_checks=sorted(rechecking),
                               held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
                                               status=active[key]["status"],
                                               reason="operator hold for existing mini content errors; inputs remain pending")
@@ -1688,8 +1801,10 @@ def run_pipeline(args, selected, snapshot, local_root):
                 for key, run in active.items():
                     marker, status = run["marker"], run["status"]
                     own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                    if key in rechecking:
+                        continue
                     if key in held:
-                        if own or status["running"]:
+                        if key in explicit_holds and (own or status["running"]):
                             raise RuntimeError("held run still has scheduler jobs or worker markers: " + key)
                         if status["state"] == "COMPLETE":
                             raise RuntimeError("held run is now complete; inspect before releasing hold: " + key)
@@ -1730,9 +1845,9 @@ def run_pipeline(args, selected, snapshot, local_root):
                         break  # Refresh real queue counts before another submission.
                 if submitted:
                     continue
-                if active.keys() == held and (not pending or args.drain_staging):
+                if active.keys() == held and not rechecking and (not pending or args.drain_staging):
                     raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
-                if any(r["status"]["failed"] for key, r in active.items() if key not in held):
+                if any(r["status"]["failed"] for key, r in active.items() if key not in held and key not in rechecking):
                     raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
                 if report["backpressure"] and not pool["jobs"] and transfer is None:
                     raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
@@ -1801,6 +1916,8 @@ def build_parser():
     run.add_argument("--run-pattern")
     run.add_argument("--hold-run", action="append", default=[], metavar="PERIOD/HALL/RUN",
                      help="retain an incomplete staged run for input repair; never submit, finalize, or clean it")
+    run.add_argument("--hold-empty-minis", action="store_true",
+                     help="hold runs with independently verified empty AdEnergy-only minis; inputs remain pending")
     run.add_argument("--drain-staging", action="store_true",
                      help="finish retained staging without preparing new catalog runs; expected inputs remain pending")
     run.add_argument("--limit-runs", type=int)
@@ -1887,6 +2004,12 @@ def build_parser():
     status.add_argument("--run-dir", required=True)
     status.add_argument("--stage-root", required=True)
     status.set_defaults(function=lambda args: print(json.dumps(run_status(
+        args.run_dir, args.stage_root))) or 0)
+
+    content = commands.add_parser("_content_errors")
+    content.add_argument("--run-dir", required=True)
+    content.add_argument("--stage-root", required=True)
+    content.set_defaults(function=lambda args: print(json.dumps(confirmed_empty_mini_errors(
         args.run_dir, args.stage_root))) or 0)
 
     wait = commands.add_parser("_wait")
