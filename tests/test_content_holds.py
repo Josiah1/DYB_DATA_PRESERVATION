@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -148,8 +149,10 @@ class ContentHoldTests(unittest.TestCase):
                 progress, saved = preserve.archive_progress(local)
                 self.assertEqual((progress['expected_inputs'], progress['pending_inputs'], progress['skipped_inputs']), (6, 6, 0))
 
-    @unittest.skipUnless(shutil.which('root') and importlib.util.find_spec('ROOT'),
-                         'PyROOT runtime required for the real inspection helper')
+    @unittest.skipUnless(shutil.which('root') and importlib.util.find_spec('ROOT') and
+                         (Path(os.environ.get('LCG_VIEW') or
+                               '/cvmfs/sft.cern.ch/lcg/views/LCG_110/x86_64-el9-gcc13-opt') / 'setup.sh').is_file(),
+                         'configured IHEP LCG setup and PyROOT runtime required for the real inspection helper')
     def test_real_root_helper_accepts_only_empty_adenergy_and_preserves_inputs(self):
         import ROOT
         ROOT.PyConfig.DisableRootLogon = True
