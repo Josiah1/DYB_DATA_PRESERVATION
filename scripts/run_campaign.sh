@@ -14,5 +14,6 @@ exec "$PYTHON" -u "$PROJECT_ROOT/preserve.py" run \
   --mount-root "$MOUNT_ROOT" --mount-uuid "$DISK_UUID" \
   --input-source mini --skip-missing-minis --ad-selection on \
   --max-jobs 300 --max-staged-gib 400 \
+  --hold-run P17B/EH1/run51237 \
   --execute --confirm-start START-DYB-PRESERVATION \
   --delete-remote-after-sync --confirm-remote-delete DELETE-VERIFIED-RUN "$@"

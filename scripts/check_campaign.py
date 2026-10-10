@@ -34,7 +34,10 @@ def status_record(progress, service, previous, now, controller=None):
             alert = "Compression job cap exceeded"
         elif controller.get("reserved_bytes", 0) > controller["max_staged_bytes"]:
             alert = "Staging reservation budget exceeded; inspect storage"
-    return dict(progress, service=service, checked_at=preserve.utc_now(),
+    held = (controller or {}).get("held_runs", [])
+    warning = ("Existing mini content errors remain pending in held runs: " +
+               ", ".join(r["run"] for r in held)) if held else None
+    return dict(progress, service=service, checked_at=preserve.utc_now(), warning=warning,
                 last_progress_time=last_progress, alert=alert, controller=controller, metadata_summary_only=True)
 
 
@@ -75,6 +78,7 @@ def main():
     preserve.atomic_json(state_path, report)
     alert = report.get("alert")
     notice = (alert != previous.get("alert") or
+              report.get("warning") != previous.get("warning") or
               (alert and now - report["last_notice_time"] >= 1800) or
               (not report.get("finished") and now - report["last_notice_time"] >= 3600) or
               (report.get("finished") and not previous.get("finished")))
@@ -85,6 +89,8 @@ def main():
             queue = report["controller"].get("queue", {})
             body += "; jobs running={} idle={} / cap={}".format(
                 queue.get("running"), queue.get("idle"), report["controller"]["max_jobs"])
+        if report.get("warning"):
+            body += "; " + report["warning"]
         title = "DYB preservation needs attention" if alert else (
             "DYB finished with gaps" if report.get("finished") and not report.get("complete") else "DYB preservation progress")
         try:

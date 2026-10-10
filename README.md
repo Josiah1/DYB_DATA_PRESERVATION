@@ -180,6 +180,17 @@ Failed chunks are resumable; verified chunks and timing reports are skipped.
 The external disk is checked before and after every transfer, preventing a
 silently unmounted volume from authorizing remote deletion.
 
+The current campaign temporarily uses `--hold-run P17B/EH1/run51237`: existing
+minis in its final three chunks lack both required event trees and contain an
+empty `AdEnergy` tuple. The hold preserves staging and failure evidence, forbids
+submission/finalization/cleanup of that run, and leaves its inputs pending in
+the full expected catalog while unaffected work continues. Controller and
+five-minute reports show the hold separately from missing-mini skips and
+service errors. Exact input evidence is on the portable disk under
+`provenance/pending-input-issues.json`. Release the hold in
+`scripts/run_campaign.sh` only after the expected All-mini inputs are repaired
+and checked; never substitute originals or mark these existing files missing.
+
 ## Verification commands
 
 Local logic checks require no ROOT installation:

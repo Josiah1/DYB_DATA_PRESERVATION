@@ -293,6 +293,96 @@ class PipelineTests(unittest.TestCase):
             self.assertIn(marker['run_dir'], staged)
             self.assertIn('read-only status failed', preserve.load_json(root / 'provenance/controller.json')['error'])
 
+    def test_explicit_hold_retains_pending_inputs_and_drains_unaffected_retries_and_transfers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            local = root / 'data'
+            local.mkdir()
+            (root / 'provenance').mkdir()
+            records, staged = [], {}
+            for number in (10001, 10002, 10003):
+                record = dict(period='P17B', hall='EH1', stem='run' + str(number),
+                              catalog='/catalog/run{}.list'.format(number), catalog_sha256=str(number), input_count=2)
+                records.append(record)
+                backup = root / 'catalogs/P17B/EH1' / (record['stem'] + '.list')
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                backup.write_text('/tiny/input1.root\n/tiny/input2.root\n')
+                marker = dict(record, run_dir='/stage/' + record['stem'], code_root='/code', chunk_count=2,
+                              files_per_job=1, selection=preserve.selection_record('on'),
+                              input_source='mini', skip_missing_minis=True)
+                staged[record['stem']] = dict(marker=marker, intent=False,
+                    submissions=[dict(cluster_id=number, submitted_at='2000-01-01T00:00:00+00:00')],
+                    status=dict(state='FAILED' if number == 10001 else 'PENDING' if number == 10002 else 'COMPLETE',
+                                ok=1 if number != 10003 else 2, failed=int(number == 10001), running=0, chunks=2))
+            held_before = copy.deepcopy(staged['run10001'])
+            args = preserve.build_parser().parse_args([
+                'run', '--local-root', str(local), '--mount-root', str(root),
+                '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                '--files-per-job', '1', '--skip-missing-minis', '--ad-selection', 'on',
+                '--delete-remote-after-sync', '--hold-run', 'P17B/EH1/run10001'])
+            args.poll_seconds = 0.001
+            submitted, verified, cleaned = [], set(), []
+
+            def remote(alias, code, arguments):
+                command = arguments[0]
+                if command == '_pool':
+                    return copy.deepcopy(dict(runs=list(staged.values()), jobs=[], queue=preserve.queue_counts([]),
+                        reserved_bytes=3 * preserve.GIB, output_bytes=10,
+                        quota=dict(free_bytes=500 * preserve.GIB, used_files=10, limit_files=200000))), 0
+                stem = Path(arguments[arguments.index('--run-dir') + 1]).name
+                self.assertNotEqual(stem, 'run10001', 'held chunks and failure evidence must not be mutated')
+                if command == '_submit':
+                    self.assertEqual(stem, 'run10002')
+                    self.assertIn('--resubmit', arguments)
+                    submitted.append(stem)
+                    staged[stem]['status'].update(state='COMPLETE', ok=2)
+                    return dict(cluster_id=20002), 0
+                if command == '_finalize':
+                    return staged[stem]['marker'], 0
+                self.assertEqual(command, '_cleanup')
+                self.assertIn(stem, verified)
+                cleaned.append(stem)
+                del staged[stem]
+                return dict(deleted=stem), 0
+
+            def sync(alias, marker, *unused):
+                verified.add(marker['stem'])
+                return dict(files=1, bytes=10, directory=marker['run_dir'])
+
+            with mock.patch('preserve.CATALOG_BACKUP_ROOT', root / 'catalogs'), \
+                    mock.patch('preserve.remote_json', side_effect=remote), \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                    mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                    mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync):
+                with self.assertRaisesRegex(RuntimeError, 'only held incomplete runs remain'):
+                    preserve.run_pipeline(args, records, {}, local)
+            self.assertEqual(submitted, ['run10002'])
+            self.assertEqual(set(cleaned), {'run10002', 'run10003'})
+            self.assertEqual(staged['run10001'], held_before)
+            state = preserve.load_json(root / 'provenance/controller.json')
+            self.assertEqual(state['held_runs'][0]['run'], 'P17B/EH1/run10001')
+            self.assertEqual(state['held_runs'][0]['status']['ok'], 1)
+            # Holding staging never adds a completed local run or a missing-file skip.
+            preserve.atomic_json(local / 'catalog-inventory.json', dict(records=records))
+            progress, saved = preserve.archive_progress(local)
+            self.assertEqual((progress['expected_runs'], progress['expected_inputs'], progress['pending_inputs']), (3, 6, 6))
+            self.assertEqual((progress['completed_runs'], progress['skipped_inputs'], saved), (0, 0, []))
+            self.assertFalse(progress['complete'])
+
+            args.hold_run = ['P17B/EH1/not-in-catalog']
+            with self.assertRaisesRegex(ValueError, 'outside the selected fixed catalog'):
+                preserve.run_pipeline(args, records, {}, local)
+            args.hold_run = ['P17B/EH1/run10001']
+            job = dict(Iwd=held_before['marker']['run_dir'], JobStatus=2, RequestCpus=1)
+            pool = dict(runs=[held_before], jobs=[job], queue=preserve.queue_counts([job]),
+                        quota={}, reserved_bytes=preserve.GIB, output_bytes=10)
+            with mock.patch('preserve.remote_json', return_value=(pool, 0)) as call, \
+                    mock.patch('preserve.CATALOG_BACKUP_ROOT', root / 'catalogs'), \
+                    mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'):
+                with self.assertRaisesRegex(RuntimeError, 'scheduler jobs or worker markers'):
+                    preserve.run_pipeline(args, records, {}, local)
+            self.assertTrue(all(c.args[2][0] == '_pool' for c in call.call_args_list))
+
 
 if __name__ == '__main__':
     unittest.main()
