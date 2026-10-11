@@ -1,10 +1,10 @@
 # Recorded missing input files
 
-Campaign ledger snapshot: **2026-10-11T05:30:47+00:00**. The campaign is ongoing.
+Campaign ledger snapshot: **2026-10-11T05:57:41+00:00**. The campaign is ongoing.
 
-- **778 individual mini files** recorded missing with `ENOENT` (errno 2).
-- **655** omitted from verified local archives (`skipped`).
-- **123** recorded for omission during run preparation (`skip_recorded`).
+- **788 individual mini files** recorded missing with `ENOENT` (errno 2).
+- **656** omitted from verified local archives (`skipped`).
+- **132** recorded for omission during run preparation (`skip_recorded`).
 - **12** earlier mini failures were preserved from their exact originals;
   their provenance remains in the ledger and they are excluded from this lost-input list.
 
@@ -18,9 +18,9 @@ minis are excluded from this missing list and separately exported in
 [CSV](broken_files.csv), and [proof ledger](broken-input-issues.json).
 
 Coverage is finalized archives plus recorded preparation observations. At this
-snapshot, 587 of 4009 runs were finalized,
-with 137,662 preserved inputs, 655 finalized missing omissions
-and 0 finalized broken omissions
+snapshot, 590 of 4009 runs were finalized,
+with 138,014 preserved inputs, 656 finalized missing omissions
+and 20 finalized broken omissions
 out of 831,334 catalog inputs. Further missing files may be
 recorded as the campaign processes the remaining catalogs. Absence is established
 at each recorded observation time; this export does not probe source storage again.
