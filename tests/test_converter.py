@@ -223,6 +223,14 @@ class ConverterTests(unittest.TestCase):
         stage = self.root / "stage"
         catalog = self.root / "run7777.list"
         mini_root = self.root / "mini"
+        code = self.root / "code"
+        (code / "bin").mkdir(parents=True)
+        (code / "bin" / "slim-root").symlink_to(CONVERTER)
+        source = (PROJECT / "preserve.py").read_text()
+        fixture_source = source.replace("MINI_ROOT = " + preserve.json.dumps(preserve.MINI_ROOT),
+                                        "MINI_ROOT = " + repr(str(mini_root)))
+        self.assertNotEqual(fixture_source, source)
+        (code / "preserve.py").write_text(fixture_source)
         patcher = mock.patch.object(preserve, "MINI_ROOT", str(mini_root))
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -235,18 +243,24 @@ class ConverterTests(unittest.TestCase):
             shutil.copyfile(source, mini)
         canonical.append(canonical[-1].replace('_0002.root', '_0003.root'))
         catalog.write_text("\n".join(canonical) + "\n")
-        marker = preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(PROJECT), 1,
+        marker = preserve.prepare_run(str(catalog), "P17B", "EH1", str(stage), str(code), 1,
                                       require_registered=False, skip_missing_minis=True)
         run_dir = Path(marker["run_dir"])
         self.assertEqual(marker["input_source"], "mini")
         self.assertEqual((marker['input_count'], marker['processed_input_count'],
                           marker['skipped_input_count']), (3, 2, 1))
         for proc_id in range(marker["chunk_count"]):
-            for _ in range(2):  # second pass must reopen, verify, and skip the finished chunk
-                subprocess.run(["bash", str(PROJECT / "scripts" / "worker.sh"), str(run_dir),
-                                str(proc_id), str(PROJECT)], check=True, env=self.env)
-            report = (run_dir / "status" / "{:06d}.ok".format(proc_id)).read_text()
-            self.assertIn("SKIP output=", report)
+            command = ["bash", str(PROJECT / "scripts" / "worker.sh"), str(run_dir),
+                       str(proc_id), str(code)]
+            subprocess.run(command, check=True, env=self.env)
+            prefix = marker["output_prefix"] + ".slim.{:06d}".format(proc_id)
+            retained = [run_dir / "outputs" / (prefix + ".root"),
+                        run_dir / "reports" / (prefix + ".sources.tsv"),
+                        run_dir / "status" / "{:06d}.ok".format(proc_id)]
+            before = [(preserve.sha256_file(path), path.stat().st_mtime_ns) for path in retained]
+            subprocess.run(command, check=True, env=self.env)
+            self.assertEqual([(preserve.sha256_file(path), path.stat().st_mtime_ns)
+                              for path in retained], before)
             self.assertFalse(list((run_dir / "status").glob("*.fail")))
         result = preserve.finalize_run(run_dir, stage)
         expected_kept = sum(e["entries"] for e in self.expected)
