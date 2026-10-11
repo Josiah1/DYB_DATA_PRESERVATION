@@ -25,10 +25,29 @@ array with no jobs in a successful global scheduler query uses the existing
 bounded retry (two submissions maximum), rather than stopping forever on the
 old submission timestamp. The submission helper independently rechecks that
 no jobs remain before retrying; workers reopen and verify completed chunks,
-then reuse them. Queued expired jobs, exhausted attempts, held jobs and query
-errors still stop safely. This is job recovery, never a missing-mini skip;
+then reuse them. Exhausted attempts, held jobs and query errors still stop
+safely. This is job recovery, never a missing-mini skip;
 catalogs, gaps and verified outputs stay intact. The scheduler class and its
 30-minute limit are unchanged.
+
+Since the October 11 run54964 recovery, an expired wait deadline with live jobs
+leaves that run pending and its writers untouched, while other verified transfers
+and bounded submissions continue. `controller.json.overdue_runs` records its exact
+run/catalog hash, submission time, elapsed seconds and live cluster/process IDs.
+The five-minute checker issues a visible overdue warning; it does not classify
+the input as missing or broken, reset the submission clock, or retry a live writer.
+The warning clears after the jobs leave the queue. Other scheduler, source,
+checksum and storage failures retain their existing error handling.
+
+Job `82081707.23` had remained claimed on `slot211@bws1005` for roughly seven
+hours with zero reported CPU, empty scheduler stdout/stderr, and no chunk23
+worker logs/status/output; the other 26 chunks were complete. Direct node access
+and a bounded Condor job-shell probe could not inspect its process, so the precise
+execute-node startup fault was not established. The controller's former fatal
+two-hour submission-age check unnecessarily stopped the entire transfer backlog.
+Any targeted retry must first establish that the old job and writer are gone;
+ordinary [Condor removal](https://htcondor.readthedocs.io/en/latest/man-pages/condor_rm.html)
+must complete, without force-removing a still-live job. Keep good chunks intact.
 
 The staging admission budget is **400 GiB**, reserving a conservative 1 GiB per
 chunk while an array is unfinished. Once all chunks are complete and every job

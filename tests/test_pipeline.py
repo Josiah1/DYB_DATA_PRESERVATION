@@ -126,13 +126,14 @@ class PipelineTests(unittest.TestCase):
                     ('PENDING', False, 1, True, 1, 'snapshot boundary'),
                     ('RUNNING', False, 1, True, 1, 'snapshot boundary'),
                     ('PENDING', False, 1, False, 0, 'snapshot boundary'),
-                    ('RUNNING', True, 1, True, 0, 'wait timeout'),
+                    ('RUNNING', True, 1, True, 0, 'snapshot boundary'),
                     ('PENDING', False, 2, True, 0, 'exhausted submission attempts')):
                 with self.subTest(state=state, queued=queued, attempts=attempts, expired=expired):
                     submissions = [dict(cluster_id=i, submitted_at=(
                         '2000-01-01T00:00:00+00:00' if expired else preserve.utc_now()))
                         for i in range(attempts)]
-                    jobs = [dict(Iwd=marker['run_dir'], JobStatus=2, RequestCpus=1)] if queued else []
+                    jobs = [dict(Iwd=marker['run_dir'], JobStatus=2, RequestCpus=1,
+                                 ClusterId=42, ProcId=0)] if queued else []
                     pool = dict(runs=[dict(marker=marker, submissions=submissions, intent=False,
                                           status=dict(state=state, running=int(state == 'RUNNING'), failed=0))],
                                 jobs=jobs, queue=preserve.queue_counts(jobs), reserved_bytes=preserve.GIB,
@@ -158,6 +159,94 @@ class PipelineTests(unittest.TestCase):
                         with self.assertRaisesRegex(RuntimeError, error):
                             preserve.run_pipeline(args, [record], {}, local)
                     self.assertEqual(len(submitted), retries)
+                    report = preserve.load_json(root / 'provenance/controller.json')
+                    self.assertEqual(len(report.get('overdue_runs', [])), int(queued and expired))
+                    if queued and expired:
+                        self.assertEqual(report['overdue_runs'][0]['jobs'],
+                                         [dict(cluster_id=42, proc_id=0, state=2)])
+
+    def test_overdue_job_retained_while_other_run_transfers_and_new_work_is_admitted(self):
+        records = preserve.inventory_records()[:3]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'provenance').mkdir()
+            local = root / 'data'
+            local.mkdir()
+            args = preserve.build_parser().parse_args([
+                'run', '--local-root', str(local), '--mount-root', str(root),
+                '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                '--max-jobs', '2', '--max-staged-gib', '3', '--files-per-job', '2000',
+                '--skip-missing-minis', '--delete-remote-after-sync'])
+            args.poll_seconds = 0.001
+            stages, verified, submitted, jobs = {}, set(), [], []
+
+            def prepare(record, state='PENDING'):
+                marker = dict(record, run_dir='/stage/' + record['stem'], code_root='/code',
+                              chunk_count=1, files_per_job=2000, selection=preserve.selection_record('off'),
+                              input_source='mini', skip_missing_minis=True)
+                stages[marker['run_dir']] = dict(marker=marker, submissions=[], intent=False,
+                    status=dict(state=state, running=0, failed=0))
+                return marker
+
+            overdue = prepare(records[0])
+            ready = prepare(records[1], 'COMPLETE')
+            stages[overdue['run_dir']]['submissions'] = [dict(cluster_id=42, submitted_at='2000-01-01T00:00:00+00:00')]
+            retained = copy.deepcopy(stages[overdue['run_dir']])
+            jobs.append(dict(Iwd=overdue['run_dir'], JobStatus=2, RequestCpus=1, ClusterId=42, ProcId=0))
+
+            def remote(alias, code, arguments):
+                command = arguments[0]
+                options = dict(zip(arguments[1::2], arguments[2::2]))
+                directory = options.get('--run-dir')
+                if command == '_pool':
+                    if ready['run_dir'] in verified and submitted:
+                        jobs.clear()
+                        for run in stages.values():
+                            run['status']['state'] = 'COMPLETE'
+                    return copy.deepcopy(dict(runs=list(stages.values()), jobs=jobs,
+                        queue=preserve.queue_counts(jobs), reserved_bytes=len(stages) * preserve.GIB,
+                        output_bytes=0, quota=dict(free_bytes=500 * preserve.GIB, used_files=1,
+                                                 limit_files=200000))), 0
+                if command == '_prepare':
+                    self.assertTrue(any(j['Iwd'] == overdue['run_dir'] for j in jobs))
+                    report = preserve.load_json(root / 'provenance/controller.json')
+                    self.assertIsNone(report['error'])
+                    self.assertEqual(report['overdue_runs'][0]['run'], 'P17B/EH1/' + overdue['stem'])
+                    return prepare(records[2]), 0
+                if command == '_submit':
+                    self.assertNotEqual(directory, overdue['run_dir'], 'never duplicate an overdue writer')
+                    self.assertNotIn('--resubmit', arguments)
+                    submitted.append(directory)
+                    jobs.append(dict(Iwd=directory, JobStatus=2, RequestCpus=1, ClusterId=43, ProcId=0))
+                    self.assertLessEqual(len(jobs), 2)
+                    stages[directory]['submissions'] = [dict(cluster_id=43, submitted_at=preserve.utc_now())]
+                    return dict(cluster_id=43), 0
+                if command == '_finalize':
+                    self.assertFalse(any(j['Iwd'] == directory for j in jobs))
+                    return stages[directory]['marker'], 0
+                self.assertEqual(command, '_cleanup')
+                self.assertIn(directory, verified)
+                del stages[directory]
+                return dict(deleted=directory), 0
+
+            def sync(alias, marker, *unused):
+                if marker['run_dir'] == ready['run_dir']:
+                    self.assertTrue(any(j['Iwd'] == overdue['run_dir'] for j in jobs))
+                    self.assertEqual(stages[overdue['run_dir']], retained)
+                    report = preserve.load_json(root / 'provenance/controller.json')
+                    self.assertEqual(report['overdue_runs'][0]['run'], 'P17B/EH1/' + overdue['stem'])
+                    self.assertIsNone(report['error'])
+                verified.add(marker['run_dir'])
+                return dict(files=1, bytes=1, directory=marker['run_dir'])
+
+            with mock.patch('preserve.remote_json', side_effect=remote), \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                    mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                    mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync):
+                preserve.run_pipeline(args, records, {}, local)
+            self.assertEqual(len(submitted), 1)
+            self.assertEqual(verified, {'/stage/' + r['stem'] for r in records})
+            self.assertFalse(preserve.load_json(root / 'provenance/controller.json')['overdue_runs'])
 
     def test_pipeline_adopts_inflight_refills_during_transfer_and_only_cleans_verified(self):
         records = preserve.inventory_records()[:5]
