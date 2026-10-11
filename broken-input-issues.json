@@ -1,0 +1,18 @@
+{
+  "final": false,
+  "issues": [],
+  "scope": "Confirmed broken observations in finalized or prepared runs; not a census of pending inputs.",
+  "summary": {
+    "artifact_bytes": 1752293936464,
+    "complete": false,
+    "completed_runs": 587,
+    "expected_inputs": 831334,
+    "expected_runs": 4009,
+    "finished": false,
+    "pending_inputs": 693017,
+    "processed_inputs": 137662,
+    "skipped_inputs": 655,
+    "status": "in_progress"
+  },
+  "updated_at": "2026-10-11T05:30:47+00:00"
+}

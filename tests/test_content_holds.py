@@ -30,6 +30,7 @@ class ContentHoldTests(unittest.TestCase):
                 error = run / 'logs/000000.err'
                 error.write_text('ERROR missing required tree: ' + mini + '\n')
                 issue = dict(path=mini, bytes=9, keys=[dict(name='AdEnergy', classname='TNtuple', entries=0)],
+                             sha256='0'*64, readable=True, zombie=False, recovered=False,
                              required={'Event/Rec/AdSimpleNL': False, 'Event/Data/CalibStats': False},
                              observed_at='2026-10-10T00:00:00+00:00')
                 response = subprocess.CompletedProcess([], 0, json.dumps([issue]), '')

@@ -85,8 +85,9 @@ def main():
               (not report.get("finished") and now - report["last_notice_time"] >= 3600) or
               (report.get("finished") and not previous.get("finished")))
     if notice:
-        body = alert or "{} runs verified; {} inputs preserved; {} missing minis skipped; {} inputs pending".format(
-            report["completed_runs"], report["processed_inputs"], report["skipped_inputs"], report["pending_inputs"])
+        body = alert or "{} runs verified; {} inputs preserved; {} missing / {} broken minis skipped; {} inputs pending".format(
+            report["completed_runs"], report["processed_inputs"], report["missing_skipped_inputs"],
+            report["broken_skipped_inputs"], report["pending_inputs"])
         if not alert and report.get("controller"):
             queue = report["controller"].get("queue", {})
             body += "; jobs running={} idle={} / cap={}".format(

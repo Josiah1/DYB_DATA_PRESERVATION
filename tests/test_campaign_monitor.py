@@ -19,7 +19,8 @@ class CampaignMonitorTests(unittest.TestCase):
             (archive / 'provenance/controller.json').write_text(json.dumps(dict(
                 heartbeat_time=time.time(), max_jobs=300, max_staged_bytes=400)))
             progress = dict(finished=False, artifact_bytes=100, completed_runs=1,
-                            processed_inputs=1, skipped_inputs=0, pending_inputs=1)
+                            processed_inputs=1, skipped_inputs=5, missing_skipped_inputs=2,
+                            broken_skipped_inputs=3, pending_inputs=1)
             for state, exit_status in (('active', 0), ('failed', 1)):
                 reads = [json.dumps(dict(filesystems=[dict(target=str(root))])),
                          'ActiveState={}\nExecMainStatus={}\nInvocationID=test\n'.format(state, exit_status)]
@@ -37,6 +38,7 @@ class CampaignMonitorTests(unittest.TestCase):
                         self.assertIn('failed', report['alert'])
                     else:
                         self.assertIsNone(report['alert'])
+                        self.assertIn('2 missing / 3 broken', notice.call_args.args[0][-1])
                     self.assertIn('notify-send', report['notification_error'])
                     self.assertEqual(report['last_notice_time'], 0)
                     self.assertEqual(notice.call_args.kwargs['timeout'], 10)

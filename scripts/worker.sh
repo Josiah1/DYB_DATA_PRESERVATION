@@ -45,12 +45,20 @@ trap finish EXIT
 [ -r "$CHUNK_LIST" ] || { echo "missing chunk: $CHUNK_LIST" >&2; exit 3; }
 [ -x "$CODE_ROOT/bin/slim-root" ] || { echo "missing converter" >&2; exit 4; }
 
+if [ ! -s "$CHUNK_LIST" ]; then
+  /usr/bin/python3 "$CODE_ROOT/preserve.py" _check_chunk --run-dir "$RUN_DIR" \
+    --stage-root "$(dirname "$(dirname "$(dirname "$RUN_DIR")")")" --chunk "$PROC_ID" >/dev/null
+  printf 'EMPTY confirmed_broken_inputs\n' > "$REPORT"
+else
 set +u
 source "$LCG_VIEW/setup.sh"
 set -u
 
 if [ -f "$OUTPUT" ] && [ -s "$SOURCE_REPORT" ] && \
    "$CODE_ROOT/bin/slim-root" --verify "$OUTPUT" >/dev/null; then
+  /usr/bin/python3 "$CODE_ROOT/preserve.py" _check_chunk --run-dir "$RUN_DIR" \
+    --stage-root "$(dirname "$(dirname "$(dirname "$RUN_DIR")")")" --chunk "$PROC_ID" >/dev/null
+  [ ! -s "$OK" ] || exit 0
   printf 'SKIP output=%s\n' "$OUTPUT" > "$REPORT"
 else
   rm -f -- "$OUTPUT" "$SOURCE_REPORT"
@@ -58,6 +66,7 @@ else
     --source-report "$SOURCE_REPORT" \
     --run-number "$RUN_NUMBER" --ad-selection "$AD_SELECTION" > "$REPORT"
   "$CODE_ROOT/bin/slim-root" --verify "$OUTPUT" >> "$REPORT"
+fi
 fi
 
 {
