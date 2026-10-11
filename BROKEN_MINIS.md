@@ -127,3 +127,67 @@ The exporter excludes broken records, validates finalized missing rows against
 `missing_skipped_inputs` with the old total as fallback, and regenerates separate
 broken exports from the same copied snapshot. The source ledger snapshot and
 missing/broken reports are tracked locally and updated in place after recovery.
+
+## Applied recovery snapshot, 2026-10-11 UTC
+
+Runtime changes were committed locally as `3068422` and `3389fbc`, then deployed
+under the remote submission lock before one controller was restarted. The
+converter subprocess fixture correction is local commit `4490f57`; its affected
+end-to-end test passed under IHEP LCG ROOT. Independent Mac validation subsequently
+reported 41 tests: 38 passed and three expected platform/LCG skips. Nothing was
+pushed.
+
+Independent inspection of failed chunks established the following full-catalog
+accounting. The earlier 93 observations were not used as a forced total.
+
+| P17B/EH1 run | Expected | Usable inputs | Missing skips | Broken skips |
+| --- | ---: | ---: | ---: | ---: |
+| run51237 | 389 | 358 | 0 | 31 |
+| run51243 | 112 | 14 | 0 | 98 |
+| run51250 | 158 | 19 | 0 | 139 |
+| run51255 | 248 | 38 | 1 | 209 |
+| run51263 | 21 | 1 | 0 | 20 |
+| run51344 | 416 | 65 | 4 | 347 |
+| run51350 | 246 | 239 | 0 | 7 |
+| Total | 1,590 | 734 | 5 | 851 |
+
+All seven holds were released and all seven runs received recovery submissions.
+Fresh checks through 05:55:33 UTC found run51237, run51243, run51250, run51255 and
+run51344 complete in staging, run51350 still processing, and run51263 already
+saved and verified on the portable disk. Run51263 contains one ROOT output,
+13,056,219 artifact bytes, one processed mini and 20 separately checksummed broken
+gaps; its full 21-input catalog remains intact and `catalog_complete` is false.
+
+All 37 pre-existing good chunks in run51237/run51350 retained identical chunk-list,
+source-report and success-evidence SHA-256 values, plus identical ROOT output byte
+sizes and modification times, before and after recovery submissions. These checks
+did not rehash their bulk ROOT data; normal run verification checks final outputs
+before remote cleanup.
+
+The copied report snapshot is dated **2026-10-11T05:57:41+00:00**: 590 verified
+local runs, 138,014 processed inputs, 656 finalized missing skips, 20 finalized
+broken skips and 692,644 pending inputs, totaling all 831,334 expected inputs.
+Artifact bytes were 1,756,930,894,692. The separate filename exports contain 788
+confirmed missing paths and 851 proved broken paths, with no overlap. Prepared
+observations are included in those filename lists but excluded from finalized
+skip totals; all reports share the copied ledger timestamp. This is an incomplete
+archive with recorded gaps.
+
+A subsequent fresh IHEP read at 05:57:08 UTC confirmed all six remaining affected
+runs COMPLETE with no jobs of their own; all seven have therefore finished their
+compression work, with six awaiting verified transfer. All 37 old good chunks
+still matched the recorded preservation checks. The live queue had 79 other
+running single-core jobs, zero idle/held, with 390,797,285,408 reserved bytes below
+400 GiB. These counts are a dated observation, not a claim of constant utilization.
+
+The controller/checker now show no holds, no pending policy decision and enabled
+new-run admission. Legacy decision/scope fields remain under
+`historical_hold_evidence`. One controller owns transfers, submissions and cleanup;
+the 300 single-core job and 400-GiB staging limits remain unchanged. Portable
+verifier/runbook snapshots and the root README policy were updated in place; the
+README's earlier dated inventory snapshot remains explicitly historical. Its 32
+relative links and readback were checked on the correct rw NTFS-3G disk.
+
+The ignored `build/oct11-broken-result.json` records fresh runtime evidence; its
+timestamps and the portable controller/progress ledgers supersede this static
+snapshot. Bulk outputs remain solely on the portable disk or retained IHEP staging.
