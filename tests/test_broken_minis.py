@@ -11,6 +11,8 @@ from unittest import mock
 
 import preserve
 
+MINI_ROOT = preserve.MINI_ROOT
+
 
 class BrokenMiniTests(unittest.TestCase):
     def setUp(self):
@@ -185,6 +187,51 @@ class BrokenMiniTests(unittest.TestCase):
         self.assertEqual((self.run/preserve.MARKER_NAME).read_bytes(),marker)
         self.assertFalse((self.run/'broken-recovery.json').exists())
         self.assertEqual(len(list((self.run/'status').glob('*.fail'))),2)
+
+    def test_worker_reuse_checks_exact_list_with_poisoned_python_environment(self):
+        code=self.root/'code';shutil.copyfile(preserve.__file__,code/'preserve.py')
+        setup=self.root/'lcg';setup.mkdir();(setup/'setup.sh').write_text('')
+        with mock.patch('preserve.MINI_ROOT',MINI_ROOT):mapped=preserve.resolve_inputs(self.originals)
+        marker=copy.deepcopy(self.marker)
+        marker['resolved_inputs']=[None if p is None else mapped[i] for i,p in enumerate(marker['resolved_inputs'])]
+        for issue in marker['skipped_inputs']:issue['mini_check']['path']=mapped[issue['catalog_index']]
+        preserve.atomic_json(self.run/preserve.MARKER_NAME,marker)
+        chunk=self.run/'chunks/000000.list'
+        chunk.write_text('\n'.join([mapped[0],mapped[2]])+'\n')
+        self.good(0)
+        output=self.run/'outputs'/(self.prefix+'.slim.000000.root')
+        report=self.run/'reports'/(self.prefix+'.slim.000000.sources.tsv')
+        ok=self.run/'status/000000.ok'
+        before=[p.read_bytes() for p in (output,report,ok)]
+        env=dict(os.environ,LCG_VIEW=str(setup),PYTHONHOME='/nonexistent-poisoned-python',PYTHONPATH='/nonexistent-poison')
+        worker=Path(preserve.__file__).parent/'scripts/worker.sh'
+        result=subprocess.run(['bash',str(worker),str(self.run),'0',str(code)],capture_output=True,text=True,env=env)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual([p.read_bytes() for p in (output,report,ok)],before)
+        chunk.write_text(mapped[2]+'\n')
+        result=subprocess.run(['bash',str(worker),str(self.run),'0',str(code)],capture_output=True,text=True,env=env)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('staged chunk paths do not match',result.stderr)
+        self.assertEqual([p.read_bytes() for p in (output,report,ok)],before)
+
+    def test_worker_empty_chunk_uses_no_root_data_or_lcg_with_poisoned_environment(self):
+        for index in (0,3):
+            (self.run/'outputs'/'{}.slim.{:06d}.root'.format(self.prefix,index)).unlink()
+            (self.run/'reports'/'{}.slim.{:06d}.sources.tsv'.format(self.prefix,index)).unlink()
+            (self.run/'status'/'{:06d}.ok'.format(index)).unlink()
+        self.broken=set(self.minis)-{self.minis[1]}
+        for index in range(4):self.fail(index)
+        marker=self.recover()['marker']
+        with mock.patch('preserve.MINI_ROOT',MINI_ROOT):mapped=preserve.resolve_inputs(self.originals)
+        for issue in marker['skipped_inputs']:issue['mini_check']['path']=mapped[issue['catalog_index']]
+        preserve.atomic_json(self.run/preserve.MARKER_NAME,marker)
+        code=self.root/'code';shutil.copyfile(preserve.__file__,code/'preserve.py')
+        worker=Path(preserve.__file__).parent/'scripts/worker.sh'
+        env=dict(os.environ,PYTHONHOME='/nonexistent-poisoned-python',PYTHONPATH='/nonexistent-poison',LCG_VIEW='/not-used')
+        result=subprocess.run(['bash',str(worker),str(self.run),'0',str(code)],capture_output=True,text=True,env=env)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertTrue((self.run/'status/000000.ok').read_text().startswith('EMPTY confirmed_broken_inputs\n'))
+        self.assertFalse(list((self.run/'outputs').iterdir()))
 
     def test_zero_usable_inputs_has_only_proved_gaps_and_no_invented_root_data(self):
         for index in (0,3):
