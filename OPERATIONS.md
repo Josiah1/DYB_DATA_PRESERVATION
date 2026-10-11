@@ -40,14 +40,28 @@ The warning clears after the jobs leave the queue. Other scheduler, source,
 checksum and storage failures retain their existing error handling.
 
 Job `82081707.23` had remained claimed on `slot211@bws1005` for roughly seven
-hours with zero reported CPU, empty scheduler stdout/stderr, and no chunk23
-worker logs/status/output; the other 26 chunks were complete. Direct node access
-and a bounded Condor job-shell probe could not inspect its process, so the precise
-execute-node startup fault was not established. The controller's former fatal
-two-hour submission-age check unnecessarily stopped the entire transfer backlog.
+hours. Initial live queries reported zero CPU, empty scheduler stdout/stderr, and
+no chunk23 worker logs/status/output; the other 26 chunks were complete. Its final
+history subsequently reported 34,896 user CPU seconds and 939 system CPU seconds,
+so the earlier zero-CPU snapshot did not establish an idle process. Direct node
+access and a bounded Condor job-shell probe timed out; the precise execute-node
+fault remains unknown. The controller's former fatal two-hour submission-age
+check unnecessarily stopped the entire transfer backlog.
 Any targeted retry must first establish that the old job and writer are gone;
 ordinary [Condor removal](https://htcondor.readthedocs.io/en/latest/man-pages/condor_rm.html)
 must complete, without force-removing a still-live job. Keep good chunks intact.
+
+On October 11 at 12:07 UTC, targeted ordinary removal of `82081707.23` completed:
+it left the queue, history recorded removal/SIGTERM, and its former slot became
+idle. Only after no old jobs remained did the controller retry as `82084513`.
+Worker `82084513.23` finished at 12:13:12 UTC with exit 0, creating and verifying
+a 213,846,933-byte output for its 16 minis (301.385 wall / 291.744 converter CPU
+seconds). Run54964 reached 27/27 good chunks, awaiting its normal verified
+transfer. All 26 pre-existing chunk-list/report/OK hashes and ROOT sizes/mtimes
+were unchanged. Independently of that retry, run51990 was verified on the portable
+disk and its staging cleaned, advancing the archive from 602 to 603 runs.
+These are dated recovery observations; live controller/progress records supersede
+the counts. Small diagnostic evidence is in ignored `build/oct11-timeout-*.json`.
 
 The staging admission budget is **400 GiB**, reserving a conservative 1 GiB per
 chunk while an array is unfinished. Once all chunks are complete and every job
