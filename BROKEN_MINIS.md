@@ -105,14 +105,19 @@ Focused tests cover proof/category/catalog/count trust boundaries, old missing
 outage checks, preserved good chunks after removals, empty/all-broken chunks,
 source-list reuse rejection, changing failure snapshots, journal replay,
 worker-free retry and unaffected transfers, and separate exports/current holds.
-IHEP LCG passed eight broken-policy tests (including a real ROOT skip/resume and
+IHEP LCG passed ten broken-policy tests (including a real ROOT skip/resume and
 schema-4 content verification) and three existing proof/hold tests. Local tests:
-39 run, 35 passed and four supported-runtime skips; shell syntax, whitespace and
+41 run, 37 passed and four supported-runtime skips; shell syntax, whitespace and
 all 4,009 fixed catalog checks passed. Existing finalized run47033 passed current
 checksum/metadata verification (26 inputs; 324,600,532 artifact bytes). Results are in the ignored
 `build/oct11-*` results. No full-archive rehash, bulk copy or new dependency is
 part of this change. Live deployment results are summarized in
 `build/oct11-broken-result.json` after the controlled transition.
+
+Worker metadata validation clears inherited `PYTHONHOME`/`PYTHONPATH`, matching
+the existing remote Python invocation. A deliberately poisoned environment is
+tested for both successful good-output reuse and empty-chunk handling; changing
+the list still rejects reuse and preserves the original output/report/status.
 
 The established missing exporter and test were relayed from the Mac because
 they were absent on Ubuntu. Their supplied pre-change SHA-256 hashes were
