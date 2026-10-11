@@ -3,11 +3,13 @@
 
 import argparse
 import concurrent.futures
+import csv
 import datetime as dt
 import errno
 import fcntl
 import functools
 import hashlib
+import io
 import json
 import math
 import os
@@ -234,6 +236,7 @@ def resolve_inputs(paths, source=DEFAULT_INPUT_SOURCE):
 def recorded_inputs(paths, record):
     source = input_source_mode(record)
     if ((record.get("skip_missing_minis") and source != "mini") or
+            (record.get("skip_broken_minis") and (source != "mini" or not record.get("skip_missing_minis"))) or
             (record.get("skipped_inputs") and not record.get("skip_missing_minis"))):
         raise ValueError("gaps require the recorded mini-only skip policy")
     if source != "mini-or-recon" and not record.get("skip_missing_minis"):
@@ -249,10 +252,20 @@ def recorded_inputs(paths, record):
             raise ValueError("invalid skipped catalog identity")
         dt.datetime.fromisoformat(issue["observed_at"])
         check = issue["mini_check"]
-        if (source != "mini" or check["path"] != minis[index] or check["status"] != "missing" or
-                not check["attempts"] or check["attempts"][-1]["status"] != "missing" or
-                check["attempts"][-1]["errno"] != errno.ENOENT):
-            raise ValueError("skipped input is not a confirmed missing mini")
+        category = issue.get("category", "missing")
+        if source != "mini" or check["path"] != minis[index]:
+            raise ValueError("skipped input is not the fixed catalog's exact mini")
+        if category == "missing":
+            if (check["status"] != "missing" or not check["attempts"] or
+                    check["attempts"][-1]["status"] != "missing" or
+                    check["attempts"][-1]["errno"] != errno.ENOENT):
+                raise ValueError("skipped input is not a confirmed missing mini")
+        elif category == "broken":
+            if (not record.get("skip_broken_minis") or check["status"] != "broken" or
+                    not valid_empty_mini_proof(check) or check["observed_at"] != issue["observed_at"]):
+                raise ValueError("skipped input is not a confirmed broken mini")
+        else:
+            raise ValueError("unknown skipped-input category")
         gaps[index] = issue
     if (not isinstance(inputs, list) or len(inputs) != len(paths) or
             any(actual is not None if index in gaps else
@@ -266,7 +279,31 @@ def recorded_inputs(paths, record):
         raise ValueError("processed and skipped input accounting does not match the catalog")
     if not skipped and record.get("skipped_input_count", 0):
         raise ValueError("skipped input count has no gap records")
+    if record.get("skip_broken_minis") and (
+            source != "mini" or not record.get("skip_missing_minis") or
+            record.get("missing_skipped_input_count") != sum(i.get("category", "missing") == "missing" for i in skipped) or
+            record.get("broken_skipped_input_count") != sum(i.get("category") == "broken" for i in skipped)):
+        raise ValueError("missing/broken input accounting does not match the catalog")
     return usable
+
+
+def valid_empty_mini_proof(issue):
+    return (type(issue.get("bytes")) is int and issue["bytes"] > 0 and
+            issue.get("readable") is True and issue.get("zombie") is False and issue.get("recovered") is False and
+            isinstance(issue.get("sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", issue["sha256"]) and
+            issue.get("keys") == [dict(name="AdEnergy", classname="TNtuple", entries=0)] and
+            issue.get("required") == {"Event/Rec/AdSimpleNL": False, "Event/Data/CalibStats": False})
+
+
+def recorded_chunks(paths, record):
+    usable = recorded_inputs(paths, record)
+    if not record.get("skip_broken_minis"):
+        return split_chunks(usable, record["files_per_job"])
+    # Missing files were compacted at preparation; broken files must never shift those chunk boundaries.
+    missing = {i["catalog_index"] for i in record["skipped_inputs"] if i.get("category", "missing") == "missing"}
+    baseline = split_chunks([i for i in range(len(paths)) if i not in missing], record["files_per_job"])
+    return [[record["resolved_inputs"][i] for i in chunk if record["resolved_inputs"][i] is not None]
+            for chunk in baseline]
 
 
 def probe_input(path):
@@ -336,8 +373,12 @@ def available_inputs(paths):
 
 
 def gap_report(record):
-    return {key: record[key] for key in (
+    result = {key: record[key] for key in (
         "catalog_sha256", "input_count", "processed_input_count", "skipped_input_count", "skipped_inputs")}
+    if record.get("skip_broken_minis"):
+        result.update({key: record[key] for key in (
+            "missing_skipped_input_count", "broken_skipped_input_count", "broken_failure_evidence")})
+    return result
 
 
 def check_input_files(paths):
@@ -677,6 +718,7 @@ def pool_status(stage_root):
         runs.append(dict(marker=marker, status=status,
                          submissions=load_json(submissions) if submissions.exists() else [],
                          intent=(directory / "submission-intent.json").exists(),
+                         broken_recovery_pending=(directory / "broken-recovery.json").exists(),
                          output_bytes=output_bytes,
                          reserved_bytes=reserve))
     return dict(checked_at=utc_now(), jobs=jobs, queue=queue_counts(jobs), runs=runs,
@@ -830,9 +872,7 @@ def confirmed_empty_mini_errors(run_dir, stage_root):
     if len(issues) != len(candidates):
         raise ValueError("incomplete content-error inspection")
     for issue, (chunk, index) in zip(issues, candidates):
-        if (issue["path"] != minis[index] or
-                issue["keys"] != [dict(name="AdEnergy", classname="TNtuple", entries=0)] or
-                issue["required"] != {"Event/Rec/AdSimpleNL": False, "Event/Data/CalibStats": False}):
+        if issue["path"] != minis[index] or not valid_empty_mini_proof(issue):
             raise ValueError("input was not confirmed as an empty AdEnergy-only mini")
         issue.update(period=marker["period"], hall=marker["hall"], run=marker["stem"],
                      catalog=marker["catalog"], catalog_sha256=marker["catalog_sha256"],
@@ -842,6 +882,127 @@ def confirmed_empty_mini_errors(run_dir, stage_root):
     if after.get("failure_updates") != before["failure_updates"]:
         return dict(recheck=True, failure_updates=after.get("failure_updates"))
     return dict(issues=issues, failure_updates=before["failure_updates"])
+
+
+def skip_broken_minis(run_dir, stage_root):
+    """Controller-owned, restartable removal of independently proved broken inputs; never move good chunks."""
+    with (Path(stage_root) / ".submission.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        run_dir, marker = load_run(run_dir, stage_root)
+        if input_source_mode(marker) != "mini" or not marker.get("skip_missing_minis"):
+            raise ValueError("broken skips require the mini-only missing-file policy")
+        if (run_dir / "run.json").exists() or (run_dir / ".complete").exists():
+            raise ValueError("never change a finalized run")
+        if (any(j["Iwd"] == str(run_dir) for j in scheduler_jobs(stage_root)) or
+                run_status(run_dir, stage_root)["running"] or (run_dir / "submission-intent.json").exists()):
+            raise RuntimeError("run still has possible writers or an unresolved submission; retain it")
+        paths = parse_catalog_inputs((run_dir / "catalog.list").read_bytes(), str(run_dir))
+        if sha256_file(run_dir / "catalog.list") != marker["catalog_sha256"]:
+            raise ValueError("broken recovery catalog checksum mismatch")
+        journal_path = run_dir / "broken-recovery.json"
+        if journal_path.exists():
+            journal = load_json(journal_path)
+            if marker not in (journal["before"], journal["after"]):
+                raise ValueError("broken recovery journal does not match the staged run")
+            mutable = {"skip_broken_minis", "resolved_inputs", "skipped_inputs", "processed_input_count",
+                       "skipped_input_count", "missing_skipped_input_count", "broken_skipped_input_count",
+                       "broken_failure_evidence", "broken_recovery_submissions"}
+            if ({k: v for k, v in journal["before"].items() if k not in mutable} !=
+                    {k: v for k, v in journal["after"].items() if k not in mutable} or
+                    any(i not in journal["after"]["skipped_inputs"] for i in journal["before"]["skipped_inputs"])):
+                raise ValueError("broken recovery journal would change fixed metadata or earlier gaps")
+            additions = [i for i in journal["after"]["skipped_inputs"]
+                         if i not in journal["before"]["skipped_inputs"]]
+            if not additions or any(i.get("category") != "broken" for i in additions):
+                raise ValueError("broken recovery must add only independently proved broken gaps")
+            proof = run_command(["bash", str(Path(marker["code_root"]) / "scripts/check_empty_mini.sh")] +
+                                [i["mini_check"]["path"] for i in additions])
+            inspected = json.loads(proof.stdout)
+            if proof.stderr.strip() or len(inspected) != len(additions) or any(
+                    not valid_empty_mini_proof(p) or (p["path"], p["sha256"]) !=
+                    (i["mini_check"]["path"], i["mini_check"]["sha256"]) for p, i in zip(inspected, additions)):
+                raise ValueError("broken input changed during recovery; retain journal and data")
+        else:
+            proof = confirmed_empty_mini_errors(run_dir, stage_root)
+            if proof.get("recheck"):
+                return proof
+            before = run_status(run_dir, stage_root)
+            if before.get("failure_updates") != proof["failure_updates"]:
+                return dict(recheck=True, failure_updates=before.get("failure_updates"))
+            chunks = recorded_chunks(paths, marker)
+            candidates = [path for chunk in sorted(proof["failure_updates"])
+                          for path in chunks[int(chunk)]]
+            scan = run_command(["bash", str(Path(marker["code_root"]) / "scripts/check_empty_mini.sh"), "--scan"] + candidates)
+            inspected = json.loads(scan.stdout)
+            if scan.stderr.strip() or not inspected or len({p["path"] for p in inspected}) != len(inspected) or any(
+                    p["path"] not in candidates or not valid_empty_mini_proof(p) for p in inspected):
+                raise ValueError("incomplete or invalid broken-input inspection")
+            if not {i["path"] for i in proof["issues"]} <= {p["path"] for p in inspected}:
+                raise ValueError("failed input changed during inspection; nothing skipped")
+            after = run_status(run_dir, stage_root)
+            if after.get("failure_updates") != proof["failure_updates"]:
+                return dict(recheck=True, failure_updates=after.get("failure_updates"))
+            updated = dict(marker, skip_broken_minis=True, resolved_inputs=list(marker["resolved_inputs"]),
+                           skipped_inputs=list(marker["skipped_inputs"]),
+                           broken_failure_evidence=list(marker.get("broken_failure_evidence", [])))
+            minis = resolve_inputs(paths, "mini")
+            for p in inspected:
+                index = minis.index(p["path"])
+                updated["resolved_inputs"][index] = None
+                updated["skipped_inputs"].append(dict(catalog_index=index, catalog_entry=paths[index],
+                    observed_at=p["observed_at"], category="broken",
+                    reason="existing readable ROOT file contains only an empty AdEnergy TNtuple; required event trees absent",
+                    mini_check=dict(p, status="broken")))
+            updated["skipped_inputs"].sort(key=lambda i: i["catalog_index"])
+            updated.update(processed_input_count=sum(p is not None for p in updated["resolved_inputs"]),
+                           skipped_input_count=len(updated["skipped_inputs"]),
+                           missing_skipped_input_count=sum(i.get("category", "missing") == "missing" for i in updated["skipped_inputs"]),
+                           broken_skipped_input_count=sum(i.get("category") == "broken" for i in updated["skipped_inputs"]))
+            for chunk in sorted(proof["failure_updates"]):
+                error = run_dir / "logs" / (chunk + ".err")
+                updated["broken_failure_evidence"].append(dict(chunk=chunk, observed_at=utc_now(),
+                    failure=(run_dir / "status" / (chunk + ".fail")).read_text(), stderr=error.read_text(),
+                    stderr_sha256=sha256_file(error), failure_updates=proof["failure_updates"][chunk]))
+            submissions = run_dir / "submissions.json"
+            updated["broken_recovery_submissions"] = len(load_json(submissions)) if submissions.exists() else 0
+            journal = dict(before=marker, after=updated)
+            atomic_json(journal_path, journal)
+        original, updated = journal["before"], journal["after"]
+        old_chunks, new_chunks = recorded_chunks(paths, original), recorded_chunks(paths, updated)
+        if len(old_chunks) != len(new_chunks) or len(new_chunks) != marker["chunk_count"]:
+            raise ValueError("broken recovery would change chunk numbering")
+        prefix = output_prefix(marker)
+        for index, (old, new) in enumerate(zip(old_chunks, new_chunks)):
+            chunk = run_dir / "chunks" / "{:06d}.list".format(index)
+            if chunk.read_text().splitlines() not in (old, new):
+                raise ValueError("chunk list changed outside guarded recovery")
+            if old == new:
+                continue
+            ok = run_dir / "status" / "{:06d}.ok".format(index)
+            output = run_dir / "outputs" / "{}.slim.{:06d}.root".format(prefix, index)
+            report = run_dir / "reports" / "{}.slim.{:06d}.sources.tsv".format(prefix, index)
+            if output.exists() or (ok.exists() and (new or not ok.read_text().startswith("EMPTY confirmed_broken_inputs\n"))):
+                raise ValueError("refusing to change a chunk with saved output or a verified OK marker")
+            if report.exists() and (new or report.read_text() != "\t".join(SOURCE_REPORT_COLUMNS) + "\n"):
+                raise ValueError("refusing to reuse an old report for a changed chunk list")
+        for index, (old, new) in enumerate(zip(old_chunks, new_chunks)):
+            if old != new:
+                atomic_text(run_dir / "chunks" / "{:06d}.list".format(index), "\n".join(new) + ("\n" if new else ""))
+        atomic_json(run_dir / "input-gaps.json", gap_report(updated))
+        atomic_json(run_dir / "manifest.json", updated)
+        atomic_json(run_dir / MARKER_NAME, updated)
+        for index, (old, new) in enumerate(zip(old_chunks, new_chunks)):
+            if old == new:
+                continue
+            if not new:
+                atomic_text(run_dir / "reports" / "{}.slim.{:06d}.sources.tsv".format(prefix, index),
+                            "\t".join(SOURCE_REPORT_COLUMNS) + "\n")
+                atomic_text(run_dir / "status" / "{:06d}.ok".format(index), "EMPTY confirmed_broken_inputs\n")
+            failure = run_dir / "status" / "{:06d}.fail".format(index)
+            if failure.exists():
+                failure.unlink()
+        journal_path.unlink()
+        return dict(marker=updated, status=run_status(run_dir, stage_root))
 
 
 def parse_result_file(path):
@@ -932,13 +1093,33 @@ def read_source_report(path, expected_paths):
     return rows
 
 
+def check_chunk_sources(run_dir, marker, index, chunks=None):
+    if chunks is None:
+        catalog = run_dir / "catalog.list"
+        if sha256_file(catalog) != marker["catalog_sha256"]:
+            raise ValueError("chunk catalog checksum mismatch")
+        chunks = recorded_chunks(parse_catalog_inputs(catalog.read_bytes(), str(catalog)), marker)
+    if len(chunks) != marker["chunk_count"] or not 0 <= index < len(chunks):
+        raise ValueError("chunk index/count differs from recorded catalog layout")
+    expected_paths = chunks[index]
+    if (run_dir / "chunks" / "{:06d}.list".format(index)).read_text().splitlines() != expected_paths:
+        raise ValueError("staged chunk paths do not match fixed catalog/input source")
+    if not expected_paths and (not marker.get("skip_broken_minis") or
+            (run_dir / "outputs" / "{}.slim.{:06d}.root".format(output_prefix(marker), index)).exists()):
+        raise ValueError("empty chunk must represent confirmed broken gaps without ROOT output")
+    report = run_dir / "reports" / "{}.slim.{:06d}.sources.tsv".format(output_prefix(marker), index)
+    rows = read_source_report(report, expected_paths)
+    for source_index, fields in enumerate(rows):
+        validate_source_fields(fields, expected_paths[source_index], source_index, selection_mode(marker["selection"]))
+    return rows
+
+
 def aggregate_duration_reports(run_dir, marker, prefix):
     mode = selection_mode(marker.get("selection"))
     catalog = run_dir / "catalog.list"
     if sha256_file(catalog) != marker["catalog_sha256"]:
         raise ValueError("staged catalog checksum does not match run marker")
-    inputs = recorded_inputs(parse_catalog_inputs(catalog.read_bytes(), str(catalog)), marker)
-    chunks = split_chunks(inputs, marker["files_per_job"])
+    chunks = recorded_chunks(parse_catalog_inputs(catalog.read_bytes(), str(catalog)), marker)
     if len(chunks) != marker["chunk_count"]:
         raise ValueError("staged chunk count does not match fixed catalog")
     rows = []
@@ -947,14 +1128,9 @@ def aggregate_duration_reports(run_dir, marker, prefix):
     total_kept = 0
     chunk_totals = []
     for chunk_index in range(marker["chunk_count"]):
-        chunk = run_dir / "chunks" / "{:06d}.list".format(chunk_index)
-        expected_paths = [line for line in chunk.read_text(encoding="utf-8").splitlines() if line]
-        if expected_paths != chunks[chunk_index]:
-            raise ValueError("staged chunk paths do not match fixed catalog/input source")
-        report = run_dir / "reports" / "{}.slim.{:06d}.sources.tsv".format(
-            prefix, chunk_index)
+        expected_paths = chunks[chunk_index]
         chunk_kept = chunk_entries = 0
-        for source_index, fields in enumerate(read_source_report(report, expected_paths)):
+        for source_index, fields in enumerate(check_chunk_sources(run_dir, marker, chunk_index, chunks)):
             entries, input_bytes, kept = validate_source_fields(
                 fields, expected_paths[source_index], source_index, mode)
             rows.append([str(len(rows)), str(chunk_index)] + fields)
@@ -968,14 +1144,14 @@ def aggregate_duration_reports(run_dir, marker, prefix):
         raise ValueError("source timing total does not match run input count")
     destination = run_dir / "durations.tsv"
     atomic_text(destination, "\t".join(DURATION_COLUMNS) + "\n" +
-                "\n".join("\t".join(row) for row in rows) + "\n")
+                "".join("\t".join(row) + "\n" for row in rows))
     return {
         "path": destination, "rows": len(rows), "entries": total_entries,
         "input_bytes": total_input_bytes, "kept": total_kept, "chunk_totals": chunk_totals,
     }
 
 
-def validate_duration_table(path, catalog_paths, files_per_job, mode="on"):
+def validate_duration_table(path, catalog_paths, files_per_job, mode="on", chunks=None):
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     if not lines or tuple(lines[0].split("\t")) != DURATION_COLUMNS:
         raise ValueError("invalid run duration header: {}".format(path))
@@ -983,17 +1159,21 @@ def validate_duration_table(path, catalog_paths, files_per_job, mode="on"):
     if len(rows) != len(catalog_paths):
         raise ValueError("run duration row count does not match catalog")
     total_entries = total_kept = 0
-    chunk_totals = [[0, 0, len(chunk)] for chunk in split_chunks(catalog_paths, files_per_job)]
+    chunks = split_chunks(catalog_paths, files_per_job) if chunks is None else chunks
+    if [p for chunk in chunks for p in chunk] != catalog_paths:
+        raise ValueError("duration chunk layout does not match processed catalog inputs")
+    chunk_totals = [[0, 0, len(chunk)] for chunk in chunks]
+    indices = [(c, s) for c, chunk in enumerate(chunks) for s in range(len(chunk))]
     for file_index, (fields, expected_path) in enumerate(zip(rows, catalog_paths)):
         if len(fields) != len(DURATION_COLUMNS):
             raise ValueError("invalid run duration row width")
-        chunk_index, source_index = divmod(file_index, files_per_job)
+        chunk_index, source_index = indices[file_index]
         try:
             row_file_index, row_chunk_index = int(fields[0]), int(fields[1])
         except ValueError as error:
             raise ValueError("invalid run duration index: {}".format(error))
         if row_file_index != file_index or row_chunk_index != chunk_index:
-            raise ValueError("run duration indices are not contiguous")
+            raise ValueError("run duration indices do not match the recorded chunk layout")
         entries, _, kept = validate_source_fields(fields[2:], expected_path, source_index, mode)
         total_entries += entries
         total_kept += kept
@@ -1013,8 +1193,12 @@ def finalize_run(run_dir, stage_root):
     prefix = (run_dir / "output-prefix").read_text(encoding="utf-8").strip()
     if prefix != output_prefix(marker):
         raise ValueError("staged output prefix does not match run metadata")
-    outputs = [run_dir / "outputs" / "{}.slim.{:06d}.root".format(prefix, index)
-               for index in range(marker["chunk_count"])]
+    paths = parse_catalog_inputs((run_dir / "catalog.list").read_bytes(), str(run_dir))
+    chunks = recorded_chunks(paths, marker)
+    output_indices = [index for index, chunk in enumerate(chunks) if chunk]
+    outputs = [run_dir / "outputs" / "{}.slim.{:06d}.root".format(prefix, index) for index in output_indices]
+    if set((run_dir / "outputs").glob("*.root")) != set(outputs):
+        raise ValueError("staged ROOT outputs differ from nonempty recorded chunks")
     missing = [str(path) for path in outputs if not path.is_file()]
     if missing:
         raise ValueError("missing outputs: {}".format(missing[:3]))
@@ -1024,10 +1208,10 @@ def finalize_run(run_dir, stage_root):
         raise ValueError("missing ROOT verifier: {}".format(verifier))
     durations = aggregate_duration_reports(run_dir, marker, prefix)
     duration_file = durations["path"]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(outputs))) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(4, len(outputs)))) as executor:
         list(executor.map(
             lambda item: verify_remote_root(verifier, item[0], item[1], marker["selection"]["mode"]),
-            zip(outputs, durations["chunk_totals"])))
+            zip(outputs, [durations["chunk_totals"][i] for i in output_indices])))
 
     artifacts = outputs + [duration_file]
     if marker.get("skipped_inputs"):
@@ -1170,7 +1354,7 @@ def verify_local_run(directory, root_verifier=None):
         raise ValueError("local completion marker does not match the catalog")
     durations = validate_duration_table(
         directory / result["duration_file"], recorded_inputs(catalog_paths, result),
-        result["files_per_job"], mode)
+        result["files_per_job"], mode, chunks=recorded_chunks(catalog_paths, result))
     duration_rows = durations["rows"]
     if (duration_rows, durations["entries"], durations["kept"]) != (
             result.get("duration_rows"), result.get("source_entries"),
@@ -1181,13 +1365,15 @@ def verify_local_run(directory, root_verifier=None):
 
     expected_outputs = {
         "outputs/{}.slim.{:06d}.root".format(prefix, index)
-        for index in range(result["chunk_count"])
+        for index, totals in enumerate(durations["chunk_totals"]) if totals[2]
     }
     actual_outputs = {
         str(path.relative_to(directory)) for path in (directory / "outputs").glob("*.root")
     }
     if actual_outputs != expected_outputs:
         raise ValueError("local ROOT output set is incomplete or contains unexpected files")
+    if result.get("output_count", len(expected_outputs)) != len(expected_outputs):
+        raise ValueError("ROOT output count differs from nonempty recorded chunks")
     expected_artifacts = expected_outputs | {result["duration_file"]}
     if result.get("skipped_inputs"):
         if result.get("catalog_complete") is not False or load_json(
@@ -1227,6 +1413,8 @@ def verify_local_run(directory, root_verifier=None):
         if not verifier.is_file() or not os.access(str(verifier), os.X_OK):
             raise ValueError("ROOT verifier is not executable: {}".format(verifier))
         for index, expected in enumerate(durations["chunk_totals"]):
+            if not expected[2]:
+                continue
             relative = "outputs/{}.slim.{:06d}.root".format(prefix, index)
             output = run_command([str(verifier), "--verify", str(directory / relative)])
             check_verified_chunk(output.stdout, expected, mode)
@@ -1245,6 +1433,8 @@ def verify_local_run(directory, root_verifier=None):
         "expected_inputs": len(catalog_paths),
         "processed_inputs": duration_rows,
         "skipped_inputs": len(result.get("skipped_inputs", [])),
+        "missing_skipped_inputs": sum(i.get("category", "missing") == "missing" for i in result.get("skipped_inputs", [])),
+        "broken_skipped_inputs": sum(i.get("category") == "broken" for i in result.get("skipped_inputs", [])),
         "catalog_complete": not result.get("skipped_inputs"),
     }
 
@@ -1340,6 +1530,7 @@ def verify_all(local_root, root_verifier=None):
             len(missing), len(unexpected), (missing + unexpected)[:5]))
 
     total_artifacts = total_bytes = total_inputs = total_entries = total_kept = total_skipped = 0
+    total_missing = total_broken = 0
     modes = set()
     input_sources = set()
     for relative, record in sorted(expected.items()):
@@ -1354,6 +1545,8 @@ def verify_all(local_root, root_verifier=None):
         total_bytes += verified["bytes"]
         total_inputs += verified["duration_rows"]
         total_skipped += verified["skipped_inputs"]
+        total_missing += verified["missing_skipped_inputs"]
+        total_broken += verified["broken_skipped_inputs"]
         total_entries += verified["source_entries"]
         total_kept += verified["kept_entries"]
         modes.add(verified["ad_selection"])
@@ -1370,6 +1563,8 @@ def verify_all(local_root, root_verifier=None):
         "expected_inputs": total_inputs + total_skipped,
         "processed_inputs": total_inputs,
         "skipped_inputs": total_skipped,
+        "missing_skipped_inputs": total_missing,
+        "broken_skipped_inputs": total_broken,
         "source_entries": total_entries,
         "kept_entries": total_kept,
         "ad_selection": modes.pop(),
@@ -1402,21 +1597,34 @@ def archive_progress(local_root):
     expected_inputs = sum(r["input_count"] for r in snapshot["records"])
     processed = sum(r["duration_rows"] for r in runs)
     skipped = sum(len(r.get("skipped_inputs", [])) for r in runs)
+    missing = sum(i.get("category", "missing") == "missing" for r in runs for i in r.get("skipped_inputs", []))
+    broken = sum(i.get("category") == "broken" for r in runs for i in r.get("skipped_inputs", []))
     finished = len(runs) == len(snapshot["records"])
     return dict(expected_runs=len(snapshot["records"]), expected_inputs=expected_inputs,
                 completed_runs=len(runs), processed_inputs=processed, skipped_inputs=skipped,
+                missing_skipped_inputs=missing, broken_skipped_inputs=broken,
                 pending_inputs=expected_inputs - processed - skipped,
                 artifact_bytes=sum(r["artifact_bytes"] for r in runs), finished=finished,
                 status=("finished_with_gaps" if skipped else "complete") if finished else "in_progress",
                 complete=finished and not skipped), runs
 
 
-def refresh_pending_holds(local_root, held, active, automatic, new_run_admission):
+def refresh_pending_holds(local_root, held, active, automatic, new_run_admission, skip_broken_minis=False):
     path = Path(local_root).parent / "provenance/pending-input-issues.json"
     ledger = load_json(path) if path.exists() else {"kind": "dyb-pending-input-issues"}
     previous = {entry["run"]: entry for entry in ledger.get("held_runs", [])}
     issues = {(i["period"], i["hall"], i["run"], i["catalog_index"]): i
               for i in ledger.get("issues", [])}
+    recorded_path = path.parent / "input-issues.json"
+    recorded = {(i["period"], i["hall"], i["run"], i["catalog_index"]): i
+                for i in load_json(recorded_path).get("issues", [])} if recorded_path.exists() else {}
+    for identity, issue in issues.items():
+        gap = recorded.get(identity, {})
+        check = gap.get("mini_check", {})
+        if (gap.get("category") == "broken" and check.get("path") == issue.get("path") and
+                gap.get("catalog_sha256") == issue.get("catalog_sha256")):
+            issue.update(disposition="broken_" + gap["status"], broken_evidence="input-issues.json",
+                         broken_revalidated_at=check["observed_at"])
     entries = []
     for key in sorted(held):
         run = active[key]
@@ -1430,9 +1638,19 @@ def refresh_pending_holds(local_root, held, active, automatic, new_run_admission
             identity = (issue["period"], issue["hall"], issue["run"], issue["catalog_index"])
             issues.setdefault(identity, issue)
     updated = dict(ledger, held_runs=entries, issues=[issues[k] for k in sorted(issues)],
-                   status="pending", new_run_admission=new_run_admission,
-                   new_run_admission_reason="unaffected compression enabled; content-error runs remain pending"
+                   status="pending" if held else "historical_content_observations",
+                   new_run_admission=new_run_admission,
+                   new_run_admission_reason="compression enabled; confirmed broken gaps recorded separately"
                    if new_run_admission else "operator requested staging drain")
+    if skip_broken_minis:
+        historical = dict(ledger.get("historical_hold_evidence", {}))
+        for field in ("current_input_policy", "decision_needed", "held_run", "scope_samples"):
+            if field in ledger:
+                historical.setdefault(field, ledger[field])
+            updated.pop(field, None)
+        updated.update(historical_hold_evidence=historical,
+                       current_input_policy="mini only; record confirmed ENOENT missing and independently proved empty-AdEnergy-only broken gaps separately; stop on other errors",
+                       broken_skip_authorized_at="2026-10-11")
     if updated != ledger:
         updated["updated_at"] = utc_now()
         atomic_json(path, updated)
@@ -1462,6 +1680,7 @@ def refresh_input_issues(local_root, prepared=None):
             index = paths.index(original)
             key = (record["period"], record["hall"], record["stem"], index)
             new = dict(item, period=key[0], hall=key[1], run=key[2], catalog_index=index,
+                       category=item.get("category", "missing"),
                        catalog=record["catalog"], catalog_sha256=record["catalog_sha256"],
                        catalog_path=original, status=status,
                        observed_at=item.get("observed_at", record["created_at"]),
@@ -1474,8 +1693,8 @@ def refresh_input_issues(local_root, prepared=None):
                 if history:
                     new["previous_observations"] = history
             issues[key] = new
-    ledger.update(report_version=2, updated_at=utc_now(), final=progress["finished"],
-                  current_input_policy="mini only; skip confirmed missing minis; stop on other errors",
+    ledger.update(report_version=3, updated_at=utc_now(), final=progress["finished"],
+                  current_input_policy="mini only; separately skip confirmed ENOENT missing and independently proved empty-AdEnergy-only broken minis; stop on other errors",
                   catalog_check_complete=progress["finished"], summary=progress,
                   scope="Finalized local runs and recorded preparation observations; pending inputs are not assumed missing.",
                   issues=[issues[key] for key in sorted(issues)])
@@ -1483,21 +1702,79 @@ def refresh_input_issues(local_root, prepared=None):
     ledger.pop("completed_runs", None)
     atomic_json(path, ledger)
     gaps = [i for i in ledger["issues"] if i["status"] in ("skipped", "skip_recorded")]
+    missing = [i for i in gaps if i.get("category", "missing") == "missing"]
     text = ("# Unexpected input-file issues\n\nUpdated: {updated}\n\n"
             "- Finalized runs: {completed_runs} / {expected_runs}\n"
             "- Preserved inputs: {processed_inputs}; finalized gaps: {skipped_inputs}\n"
+            "- Finalized missing skips: {missing_skipped_inputs}; broken skips: {broken_skipped_inputs}\n"
             "- Pending inputs: {pending_inputs}; expected catalog inputs: {expected_inputs}\n"
             "- Archive complete without gaps: {complete}; all runs finalized: {finished}\n\n"
             "Counts use finalized local metadata; monitoring does not repeat artifact hashes.\n"
-            "New work uses minis only. Only confirmed missing minis are skipped; other errors stop the run.\n"
+            "New work uses minis only. Confirmed ENOENT missing and independently proved broken minis are distinct gaps; other errors stop the run.\n"
             "The full expected catalog is unchanged. Exact paths, separate missing/I/O reasons,\n"
             "retry timestamps, fallback observations and prior observations are in [input-issues.json](input-issues.json).\n"
             "A finalized run may have recorded gaps; it does not make the archive complete.\n\n"
-            "## Recorded skips\n\n").format(updated=ledger["updated_at"], **progress)
+            "See [BROKEN_INPUTS.md](BROKEN_INPUTS.md) for broken filenames and exact proof exports.\n\n"
+            "## Confirmed missing mini skips\n\n").format(updated=ledger["updated_at"], **progress)
     text += "\n".join("- `{}` / catalog index {}: {}".format(
-        i["catalog_path"], i["catalog_index"], i["status"]) for i in gaps) + "\n"
+        i["mini_check"]["path"], i["catalog_index"], i["status"]) for i in missing) + "\n"
     atomic_text(provenance / "INPUT_ISSUES.md", text)
+    export_broken_files(provenance, ledger)
     return progress
+
+
+def export_broken_files(provenance, ledger):
+    provenance = Path(provenance)
+    progress = ledger["summary"]
+    broken = [i for i in ledger["issues"] if i.get("category") == "broken" and
+              i["status"] in ("skipped", "skip_recorded")]
+    if (len({i["mini_check"]["path"] for i in broken}) != len(broken) or
+            sum(i["status"] == "skipped" for i in broken) != progress.get("broken_skipped_inputs", 0)):
+        raise ValueError("broken export has duplicate paths or a different finalized count")
+    digests = catalog_backup_digests() if broken else {}
+    catalogs = {}
+    for i in broken:
+        relative = str(Path(i["period"]) / i["hall"] / (i["run"] + ".list"))
+        if relative not in catalogs:
+            catalog = CATALOG_BACKUP_ROOT / relative
+            if sha256_file(catalog) != digests[relative]:
+                raise ValueError("broken export fixed catalog checksum mismatch")
+            catalogs[relative] = parse_catalog_inputs(catalog.read_bytes(), relative)
+        index = i["catalog_index"]
+        if (type(index) is not int or not 0 <= index < len(catalogs[relative]) or
+                i["catalog_sha256"] != digests[relative] or i["catalog_entry"] != catalogs[relative][index] or
+                i["catalog_path"] != i["catalog_entry"]):
+            raise ValueError("broken export does not match the fixed catalog")
+        check = i["mini_check"]
+        dt.datetime.fromisoformat(i["observed_at"])
+        if (not valid_empty_mini_proof(check) or check.get("status") != "broken" or
+                check.get("observed_at") != i["observed_at"] or
+                check.get("path") != resolve_inputs([i["catalog_entry"]], "mini")[0]):
+            raise ValueError("broken export lacks exact-mini empty-tuple proof")
+    atomic_json(provenance / "broken-input-issues.json", dict(updated_at=ledger["updated_at"], final=progress["finished"],
+        summary=progress, scope="Confirmed broken observations in finalized or prepared runs; not a census of pending inputs.", issues=broken))
+    atomic_text(provenance / "broken_files.list", "".join(i["mini_check"]["path"] + "\n" for i in broken))
+    table = io.StringIO()
+    writer = csv.writer(table, lineterminator="\n")
+    writer.writerow(("period", "hall", "run", "catalog_index", "catalog_entry", "mini_path", "status", "bytes", "sha256", "inspected_at", "reason"))
+    for i in broken:
+        check = i["mini_check"]
+        writer.writerow((i["period"], i["hall"], i["run"], i["catalog_index"], i["catalog_entry"], check["path"],
+                         i["status"], check["bytes"], check["sha256"], check["observed_at"], i["reason"]))
+    atomic_text(provenance / "broken_files.csv", table.getvalue())
+    atomic_text(provenance / "BROKEN_INPUTS.md", (
+        "# Confirmed broken mini inputs\n\nUpdated: {}\n\n"
+        "{} distinct confirmed broken paths recorded; {} are skipped in finalized local runs. "
+        "Preparation observations remain pending until their run is verified locally. This is not a census of all expected inputs.\n\n"
+        "Proof requires an existing readable, non-zombie, non-recovered ROOT file containing only a zero-entry "
+        "AdEnergy TNtuple and neither required event tree. The file's SHA-256, size, catalog identity, "
+        "inspection timestamp and reason are retained. No original reconstruction is substituted.\n\n"
+        "- [Exact filename list](broken_files.list)\n- [CSV](broken_files.csv)\n"
+        "- [Evidence ledger](broken-input-issues.json)\n- [Missing reports and reconciliation](INPUT_ISSUES.md)\n\n"
+        "Every finalized gapped run checksums input-gaps.json; expected = processed + missing-skipped + broken-skipped. "
+        "A finalized run with gaps is not a gap-free catalog or archive.\n\n{}").format(
+            ledger["updated_at"], len(broken), progress.get("broken_skipped_inputs", 0),
+            "\n".join("- `{}` / catalog index {}: {}".format(i["mini_check"]["path"], i["catalog_index"], i["status"]) for i in broken)).rstrip() + "\n")
 
 
 def validate_local_mount(local_root, mount_root, mount_uuid=None):
@@ -1693,6 +1970,8 @@ def run_pipeline(args, selected, snapshot, local_root):
     held = explicit_holds | recorded_holds
     if args.hold_empty_minis and args.input_source != "mini":
         raise ValueError("empty-mini holds require mini-only inputs")
+    if args.skip_broken_minis and (args.input_source != "mini" or not args.skip_missing_minis or args.hold_empty_minis):
+        raise ValueError("broken skips require mini-only missing skips and cannot also request empty-mini holds")
     if held - set(expected):
         raise ValueError("held run is outside the selected fixed catalog: " + ", ".join(sorted(held - set(expected))))
     _, finalized = archive_progress(local_root)
@@ -1754,7 +2033,26 @@ def run_pipeline(args, selected, snapshot, local_root):
                         observed.add(key)
                     if key not in done or args.delete_remote_after_sync:
                         active[key] = run
-                    if args.hold_empty_minis and key not in explicit_holds and run["status"]["failed"]:
+                    own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                    if (args.skip_broken_minis and key not in explicit_holds and
+                            (run["status"]["failed"] or run.get("broken_recovery_pending")) and
+                            not own and not run["status"]["running"]):
+                        recovery = call("_skip_broken", marker)
+                        if recovery.get("recheck"):
+                            content_rechecks[key] = content_rechecks.get(key, 0) + 1
+                            if content_rechecks[key] > 8:
+                                raise RuntimeError("broken-input snapshot did not settle after 8 rechecks; run retained: " + key)
+                            rechecking.add(key)
+                            continue
+                        content_rechecks.pop(key, None)
+                        run.update(recovery)
+                        run["broken_recovery_pending"] = False
+                        refresh_input_issues(local_root, prepared=run["marker"])
+                        print("recorded broken gaps {}; expected={} processed={} missing={} broken={}; good chunks retained".format(
+                            key, run["marker"]["input_count"], run["marker"]["processed_input_count"],
+                            run["marker"]["missing_skipped_input_count"], run["marker"]["broken_skipped_input_count"]), flush=True)
+                    elif ((args.hold_empty_minis or args.skip_broken_minis) and
+                          key not in explicit_holds and run["status"]["failed"]):
                         signature = run["status"]["failure_updates"]
                         if automatic.get(key, {}).get("failure_updates") != signature:
                             proof = call("_content_errors", marker)
@@ -1771,14 +2069,16 @@ def run_pipeline(args, selected, snapshot, local_root):
                             automatic[key] = proof
                             print("holding {} pending; confirmed empty-mini errors={}".format(
                                 key, len(proof["issues"])), flush=True)
-                held = explicit_holds | recorded_holds | set(automatic)
+                        if args.skip_broken_minis:
+                            rechecking.add(key)  # Proved content errors await the run's existing writers; no mutation yet.
+                held = explicit_holds | recorded_holds | (set(automatic) if args.hold_empty_minis else set())
                 directories = {r["marker"]["run_dir"] for r in pool["runs"]}
                 if any(j["Iwd"] not in directories for j in pool["jobs"]):
                     raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
                 if held - set(active):
                     raise RuntimeError("held run has no retained staging: " + ", ".join(sorted(held - set(active))))
-                if held:
-                    refresh_pending_holds(local_root, held, active, automatic, not args.drain_staging)
+                if held or (args.skip_broken_minis and pending_path.exists()):
+                    refresh_pending_holds(local_root, held, active, automatic, not args.drain_staging, args.skip_broken_minis)
 
                 pending = [r for key, r in expected.items() if key not in done and key not in active]
                 report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
@@ -1788,6 +2088,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                               transferring=relative(transferring) if transferring else None,
                               pending_runs=len(pending), backpressure=None, error=None,
                               new_run_admission=not args.drain_staging,
+                              skip_broken_minis=args.skip_broken_minis,
                               pending_content_checks=sorted(rechecking),
                               held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
                                               status=active[key]["status"],
@@ -1821,8 +2122,9 @@ def run_pipeline(args, selected, snapshot, local_root):
                         if expired and own:
                             raise RuntimeError("run exceeded wait timeout; jobs retained: " + key)
                     # Scheduler kills before worker startup can leave no .fail or .running file.
-                    retry = not own and (status["state"] == "FAILED" or expired)
-                    if retry and len(run["submissions"]) >= args.max_attempts:
+                    retry = not own and (status["state"] == "FAILED" or expired or
+                                         marker.get("broken_recovery_submissions") == len(run["submissions"]))
+                    if retry and len(run["submissions"]) - marker.get("broken_recovery_submissions", 0) >= args.max_attempts:
                         raise RuntimeError("run exhausted submission attempts: " + key)
                     if run["intent"] or not run["submissions"] or retry:
                         if pool["queue"]["outstanding"] + marker["chunk_count"] > args.max_jobs:
@@ -1927,6 +2229,8 @@ def build_parser():
                           "explicitly record exact originals for unavailable minis")
     run.add_argument("--skip-missing-minis", action="store_true",
                      help="record and skip confirmed missing minis; stop on other errors or suspected outages")
+    run.add_argument("--skip-broken-minis", action="store_true",
+                     help="independently prove and separately record empty AdEnergy-only minis, preserving chunk boundaries")
     run.add_argument("--ad-selection", choices=AD_SELECTION_MODES, default="off",
                      help="on: keep AD entries above 0.6 MeV plus every other detector; "
                           "off (default): keep every entry (band counts are still recorded)")
@@ -2011,6 +2315,21 @@ def build_parser():
     content.add_argument("--stage-root", required=True)
     content.set_defaults(function=lambda args: print(json.dumps(confirmed_empty_mini_errors(
         args.run_dir, args.stage_root))) or 0)
+
+    broken = commands.add_parser("_skip_broken")
+    broken.add_argument("--run-dir", required=True)
+    broken.add_argument("--stage-root", required=True)
+    broken.set_defaults(function=lambda args: print(json.dumps(skip_broken_minis(args.run_dir, args.stage_root))) or 0)
+
+    check_chunk = commands.add_parser("_check_chunk")
+    check_chunk.add_argument("--run-dir", required=True)
+    check_chunk.add_argument("--stage-root", required=True)
+    check_chunk.add_argument("--chunk", required=True, type=int)
+    def check_chunk_function(args):
+        directory, marker = load_run(args.run_dir, args.stage_root)
+        check_chunk_sources(directory, marker, args.chunk)
+        return 0
+    check_chunk.set_defaults(function=check_chunk_function)
 
     wait = commands.add_parser("_wait")
     wait.add_argument("--run-dir", required=True)

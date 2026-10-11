@@ -168,13 +168,21 @@ records the branch signatures. That historical original-file fallback stays
 truthfully recorded in the verified output. It is not the policy for new work.
 
 The user's September 29 correction requires **minis only** for all new work.
-The launcher now passes `--input-source mini --skip-missing-minis`. It reads
+The launcher now passes `--input-source mini --skip-missing-minis --skip-broken-minis`. It reads
 no originals. Confirmed missing minis are recorded and skipped individually;
 I/O errors are retried twice (1 and 2 seconds), while unresolved I/O, permission,
 invalid-header or suspected storage-outage errors stop processing. Missing-file
 confirmation requires two consecutive ENOENT results, 0.2 seconds apart.
 Three consecutive missing files or more than `max(3, input_count // 10)` gaps
 stops preparation for inspection, without freezing a run full of suspected gaps.
+
+On **2026-10-11**, the user authorized recording confirmed existing unusable
+minis as **BROKEN**, separately from ENOENT **MISSING**, and processing the other
+inputs. The narrow supported broken signature and recovery/verification contract
+are in [BROKEN_MINIS.md](BROKEN_MINIS.md). Existing seven-run holds are released
+only after fresh independent ROOT proof and a no-writer check. Full catalogs,
+verified chunks and historical provenance stay unchanged. Other operational or
+content failures still stop; the missing-only outage protections above remain.
 
 At the correction, 11 runs / 2,763 sources / 34.24 GB had been verified.
 Run21540 has 126 expected minis: files 0103 and 0159 are missing; 124 minis
@@ -185,6 +193,10 @@ Each gapped run has a checksummed `input-gaps.json`; processed and skipped
 counts must reconcile to its full catalog. The controller updates
 `provenance/input-issues.json` and `INPUT_ISSUES.md` before submission and after
 verified transfer. Historical fallback observations retain their actual source.
+Broken filenames and proof are exported beside them as `BROKEN_INPUTS.md`,
+`broken_files.list`, `broken_files.csv`, and `broken-input-issues.json`.
+The expected count equals processed + missing-skipped + broken-skipped;
+unfinalized runs stay pending in archive totals.
 Final accounting distinguishes `finished_with_gaps` from `complete`; `verify-all`
 exits 2 for a valid archive with recorded gaps. `.complete` and the run's
 `complete` field describe finalization, not absence of catalog gaps.
@@ -218,7 +230,8 @@ Read progress with `systemctl --user status dyb-preservation.service`
 and `tail -n 30 build/campaign.log`. The command inhibits sleep while running.
 After a failure, inspect the log and fix its cause before restarting. An
 unmounted/replaced disk, unreadable input, failed chunk, or checksum mismatch
-stops the controller except for explicitly recorded missing minis. A disk-held
+stops the controller except for explicitly recorded missing minis and proved
+empty-`AdEnergy`-only broken inputs. A disk-held
 advisory lock rejects a second controller. This sample-based capacity estimate does not establish
 archive-wide input availability or lossless TWin physics equivalence.
 
@@ -315,6 +328,8 @@ preparation opens every mapped source and checks its four-byte ROOT signature
 before staging. Unavailable inputs stop strict `mini` mode. The campaign's
 explicit `--skip-missing-minis` flag permits only confirmed missing minis to
 be skipped, with recorded gaps and the full expected catalog retained.
+The separately authorized `--skip-broken-minis` policy requires strict independent
+ROOT proof; generic ROOT errors are not skip observations.
 The September 2 mini index leaves 4,087 required paths unlisted;
 see `estimates/mini-branches-2026-09-27/`. A dry run does not open source files.
 

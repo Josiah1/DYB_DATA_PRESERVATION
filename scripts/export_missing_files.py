@@ -23,6 +23,11 @@ def missing_rows(ledger):
             continue
         if issue["status"] not in ("skipped", "skip_recorded"):
             raise ValueError("unclassified input issue: {}".format(issue["status"]))
+        category = issue.get("category", "missing")
+        if category == "broken":
+            continue
+        if category != "missing":
+            raise ValueError("unclassified input category: " + str(category))
         relative = str(Path(issue["period"]) / issue["hall"] / (issue["run"] + ".list"))
         expected_sha = digests[relative]
         if relative not in catalogs:
@@ -53,7 +58,8 @@ def missing_rows(ledger):
     rows.sort(key=lambda row: row["mini_path"])
     if len({row["mini_path"] for row in rows}) != len(rows):
         raise ValueError("duplicate missing mini paths")
-    if sum(row["disposition"] == "skipped" for row in rows) != ledger["summary"]["skipped_inputs"]:
+    summary = ledger["summary"]
+    if sum(row["disposition"] == "skipped" for row in rows) != summary.get("missing_skipped_inputs", summary["skipped_inputs"]):
         raise ValueError("finalized omission count differs from campaign summary")
     return rows
 
@@ -62,7 +68,7 @@ def main():
     ledger = json.loads((ROOT / "input-issues.json").read_text())
     rows = missing_rows(ledger)
     summary = ledger["summary"]
-    finalized = summary["skipped_inputs"]
+    finalized = summary.get("missing_skipped_inputs", summary["skipped_inputs"])
     recovered = sum(i["status"] == "preserved_from_exact_recon" for i in ledger["issues"])
     columns = ("mini_path", "filename", "period", "hall", "run", "catalog_index",
                "disposition", "observed_at", "errno", "catalog_path", "catalog_sha256", "evidence")
@@ -86,11 +92,15 @@ Campaign ledger snapshot: **{ledger['updated_at']}**. The campaign is ongoing.
 [CSV](missing-input-files.csv) adds filename, period, hall, run, zero-based catalog index,
 disposition, observation time, original catalog path, checksum, and evidence.
 Each row identifies a file. Scheduler timeouts, bad-run classifications, I/O
-errors, invalid ROOT headers, and unassessed inputs are excluded.
+errors, invalid ROOT headers, and unassessed inputs are excluded. Confirmed broken
+minis are excluded from this missing list and separately exported in
+[BROKEN_INPUTS.md](BROKEN_INPUTS.md), [their path list](broken_files.list),
+[CSV](broken_files.csv), and [proof ledger](broken-input-issues.json).
 
 Coverage is finalized archives plus recorded preparation observations. At this
 snapshot, {summary['completed_runs']} of {summary['expected_runs']} runs were finalized,
-with {summary['processed_inputs']:,} preserved inputs and {finalized} finalized omissions
+with {summary['processed_inputs']:,} preserved inputs, {finalized} finalized missing omissions
+and {summary.get('broken_skipped_inputs', 0)} finalized broken omissions
 out of {summary['expected_inputs']:,} catalog inputs. Further missing files may be
 recorded as the campaign processes the remaining catalogs. Absence is established
 at each recorded observation time; this export does not probe source storage again.
@@ -108,6 +118,7 @@ After copying an updated ledger, regenerate and validate the lists with:
 The exporter checks each catalog checksum and file index, exact mini-path mapping,
 missing-file evidence, unique paths, and the finalized omission total before writing.
 """)
+    preserve.export_broken_files(ROOT, ledger)
     print(json.dumps(dict(snapshot=ledger["updated_at"], files=len(rows),
                           finalized=finalized, prepared=len(rows) - finalized,
                           recovered_excluded=recovered), sort_keys=True))

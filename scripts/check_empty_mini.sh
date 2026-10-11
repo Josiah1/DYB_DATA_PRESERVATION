@@ -15,13 +15,21 @@ ROOT.PyConfig.DisableRootLogon = True
 ROOT.PyConfig.StartGUIThread = False
 ROOT.gROOT.SetBatch(True)
 issues = []
-for name in sys.argv[1:]:
+scan = sys.argv[1:2] == ['--scan']
+for name in sys.argv[2:] if scan else sys.argv[1:]:
     path = Path(name)
     before = path.stat()
     file = ROOT.TFile.Open(name, 'READ')
     if not file or file.IsZombie() or file.TestBit(ROOT.TFile.kRecovered):
         raise RuntimeError('unusable ROOT input, not a confirmed empty tuple: ' + name)
     keys = [(key.GetName(), key.GetClassName()) for key in file.GetListOfKeys()]
+    if scan and all(file.Get(tree) and file.Get(tree).InheritsFrom('TTree')
+                    for tree in ('Event/Rec/AdSimpleNL', 'Event/Data/CalibStats')):
+        file.Close()
+        after = path.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise RuntimeError('input changed during content inspection: ' + name)
+        continue  # These remain converter inputs; this is not a full content-validation proof.
     if keys != [('AdEnergy', 'TNtuple')] or file.Get('AdEnergy').GetEntries() != 0:
         raise RuntimeError('input is not an AdEnergy-only empty tuple: ' + name)
     file.Close()
@@ -33,6 +41,7 @@ for name in sys.argv[1:]:
     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
         raise RuntimeError('input changed during content inspection: ' + name)
     issues.append(dict(path=name, bytes=after.st_size, sha256=digest.hexdigest(),
+                       readable=True, zombie=False, recovered=False,
                        keys=[dict(name='AdEnergy', classname='TNtuple', entries=0)],
                        required={'Event/Rec/AdSimpleNL': False, 'Event/Data/CalibStats': False},
                        observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')))

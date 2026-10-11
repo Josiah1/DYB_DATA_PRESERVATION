@@ -1,10 +1,10 @@
 # Recorded missing input files
 
-Campaign ledger snapshot: **2026-10-08T09:24:38+00:00**. The campaign is ongoing.
+Campaign ledger snapshot: **2026-10-11T05:30:47+00:00**. The campaign is ongoing.
 
-- **407 individual mini files** recorded missing with `ENOENT` (errno 2).
-- **279** omitted from verified local archives (`skipped`).
-- **128** recorded for omission during run preparation (`skip_recorded`).
+- **778 individual mini files** recorded missing with `ENOENT` (errno 2).
+- **655** omitted from verified local archives (`skipped`).
+- **123** recorded for omission during run preparation (`skip_recorded`).
 - **12** earlier mini failures were preserved from their exact originals;
   their provenance remains in the ledger and they are excluded from this lost-input list.
 
@@ -12,11 +12,15 @@ Campaign ledger snapshot: **2026-10-08T09:24:38+00:00**. The campaign is ongoing
 [CSV](missing-input-files.csv) adds filename, period, hall, run, zero-based catalog index,
 disposition, observation time, original catalog path, checksum, and evidence.
 Each row identifies a file. Scheduler timeouts, bad-run classifications, I/O
-errors, invalid ROOT headers, and unassessed inputs are excluded.
+errors, invalid ROOT headers, and unassessed inputs are excluded. Confirmed broken
+minis are excluded from this missing list and separately exported in
+[BROKEN_INPUTS.md](BROKEN_INPUTS.md), [their path list](broken_files.list),
+[CSV](broken_files.csv), and [proof ledger](broken-input-issues.json).
 
 Coverage is finalized archives plus recorded preparation observations. At this
-snapshot, 255 of 4009 runs were finalized,
-with 54,098 preserved inputs and 279 finalized omissions
+snapshot, 587 of 4009 runs were finalized,
+with 137,662 preserved inputs, 655 finalized missing omissions
+and 0 finalized broken omissions
 out of 831,334 catalog inputs. Further missing files may be
 recorded as the campaign processes the remaining catalogs. Absence is established
 at each recorded observation time; this export does not probe source storage again.

@@ -12,10 +12,7 @@ exec "$PYTHON" -u "$PROJECT_ROOT/preserve.py" run \
   --remote-stage-root /scratchfs2/dyw/lijj16/DYB_DATA_PRESERVATION/staging \
   --local-root "$MOUNT_ROOT/DYB_DATA_PRESERVATION/data" \
   --mount-root "$MOUNT_ROOT" --mount-uuid "$DISK_UUID" \
-  --input-source mini --skip-missing-minis --ad-selection on \
+  --input-source mini --skip-missing-minis --skip-broken-minis --ad-selection on \
   --max-jobs 300 --max-staged-gib 400 \
-  --hold-run P17B/EH1/run51237 \
-  --hold-run P17B/EH1/run51243 --hold-run P17B/EH1/run51250 \
-  --hold-empty-minis \
   --execute --confirm-start START-DYB-PRESERVATION \
   --delete-remote-after-sync --confirm-remote-delete DELETE-VERIFIED-RUN "$@"

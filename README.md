@@ -50,16 +50,21 @@ Run, stream (Neutrino/NoTag), hall, version and file number are unchanged.
 `catalog.list` and its checksum retain the original catalog; chunk lists and
 timing/provenance paths identify the actual inputs.
 
-The current single-disk launcher uses **`--input-source mini --skip-missing-minis`**.
+The current single-disk launcher uses **`--input-source mini --skip-missing-minis --skip-broken-minis`**.
 It never opens original reconstruction files. Two consecutive missing-file
 results permit an individual skip, recorded with its exact catalog index,
 identity, mini path, timestamps and reason. I/O errors get up to three attempts;
 unresolved I/O, permission and invalid-header errors stop the run. An inaccessible
 or empty mini root, three consecutive missing minis, or more than 10% missing
 (with a floor of three) stops preparation as a suspected storage outage.
+The October 11 user decision additionally permits independently confirmed
+empty-`AdEnergy`-only minis to be recorded as **broken**, separately from missing
+files. Other content errors remain errors; see [the broken-mini policy](BROKEN_MINIS.md).
 
 The complete catalog stays unchanged. `input_count` is the expected count;
-`processed_input_count + skipped_input_count` must equal it. `resolved_inputs`
+`processed_input_count + skipped_input_count` must equal it. New broken-gap
+records additionally require `expected = processed + missing_skipped_input_count + broken_skipped_input_count`.
+`resolved_inputs`
 stays aligned with the catalog, with `null` only for explicitly recorded gaps.
 The SHA-256-protected `input-gaps.json` is required for every run with gaps.
 `durations.tsv` lists only processed inputs, in catalog order; its `fileIndex`
@@ -71,7 +76,10 @@ Earlier verified runs, including original-file fallbacks, keep their source
 metadata and output bytes. The policy transition pins those existing run names
 and source modes in `catalog-inventory.json`; new runs must be mini-derived.
 The automatically updated `provenance/input-issues.json` and `INPUT_ISSUES.md`
-retain missing-mini records and historical fallback observations. The approximate
+retain separate missing/broken records and historical fallback observations.
+`BROKEN_INPUTS.md`, `broken_files.list`, `broken_files.csv` and
+`broken-input-issues.json` export exact confirmed broken identities and proof.
+The approximate
 0.5% from an earlier inventory is not used as a target or forced missing count.
 Schema-3 archives use the previous toolchain at commit `5479aef`; schema 4
 records the new 0.6-MeV count band and refuses to mix with that older format.
@@ -180,33 +188,32 @@ Failed chunks are resumable; verified chunks and timing reports are skipped.
 The external disk is checked before and after every transfer, preventing a
 silently unmounted volume from authorizing remote deletion.
 
-The current campaign temporarily holds `P17B/EH1/run51237`, `run51243`, and
-`run51250` with explicit `--hold-run` arguments: existing minis lack both
-required event trees and contain an empty `AdEnergy` tuple. Holds preserve
-staging and failure evidence, forbid submission/finalization/cleanup of those
-runs, and leave their inputs pending in
-the full expected catalog while unaffected work continues. Controller and
-five-minute reports show the hold separately from missing-mini skips and
-service errors. New-run admission is enabled. With `--hold-empty-minis`, a
-failed chunk is eligible for a pending run hold only when its exact worker
-error names a mini in that fixed chunk and an independent ROOT read confirms
-the file contains only a zero-entry `AdEnergy` TNtuple. Every failed chunk must
-pass this check; operational, I/O, permission, corruption and unrecognized
-errors still stop the controller. Existing workers on an automatically held
-run may finish their other chunks, which remain preserved. These inputs are
-not skipped; the run remains incomplete and consumes staging reservation.
-Unchanged failure signatures reuse the proof; new failures require another
-inspection. Holds persist across restarts.
-If workers publish another failure during inspection, defer that run and
-recheck a fresh snapshot, up to eight times; this does not defer operational
-or unknown errors. Retained usable staging continues
-through verification, transfer, and guarded cleanup. Exact input evidence is on the portable disk under
-`provenance/pending-input-issues.json`. Release the hold in
-`scripts/run_campaign.sh` only after the expected All-mini inputs are repaired
-and checked. Automatically recorded holds also require inspecting and releasing
-their pending ledger entry after repair. `--drain-staging` remains available
-for an explicit transfer-only operation; never substitute originals or mark
-these existing files missing.
+The October 11 user decision releases the seven empty-mini content holds using
+`--skip-broken-minis`. Every failed chunk must first have the exact recognized
+worker error and independent ROOT proof. Only existing, readable, non-zombie,
+non-recovered files containing solely a zero-entry `AdEnergy` TNtuple, with
+neither required event tree, qualify. Inspecting the other files in those failed
+chunks may discover further qualifying files; the original 93 observations are
+not a complete census. SHA-256, catalog identity, timestamps, reason and original
+worker failure evidence are retained in checksummed per-run gaps. Operational,
+I/O, permission, unknown content, mount and scheduler failures remain errors.
+
+The controller waits until the run has no scheduler jobs, worker markers or
+ambiguous submission before changing its lists. Missing-only preparation fixes
+chunk boundaries; later broken removals stay within those boundaries. Good
+chunks retain their original membership, outputs and timing reports. Reusing an
+output requires its source report to match that chunk's current exact input list.
+Empty chunks have a zero-row source report and an explicit empty status, with no
+invented ROOT event data. An entirely broken run can finalize only with proof
+for every omitted input and full expected-count reconciliation; it has no ROOT
+outputs and is never catalog-complete. A small write-ahead journal makes this
+recovery resumable. Changed failure snapshots defer/recheck up to eight times.
+
+`provenance/pending-input-issues.json` retains the original hold observations and
+links their later broken-gap dispositions. Manual `--hold-run` and
+`--hold-empty-minis` remain available for explicit hold workflows, while
+`--drain-staging` is an explicit transfer-only operation. The production launcher
+enables new-run admission and the separate missing/broken skip policy.
 
 ## Verification commands
 
