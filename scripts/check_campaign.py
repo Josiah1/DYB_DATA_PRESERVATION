@@ -39,6 +39,10 @@ def status_record(progress, service, previous, now, controller=None):
                ", ".join(r["run"] for r in held)) if held else None
     if (controller or {}).get("new_run_admission") is False:
         warning = (warning + "; " if warning else "") + "New run admission paused while retained staging drains"
+    overdue = (controller or {}).get("overdue_runs", [])
+    if overdue:
+        warning = (warning + "; " if warning else "") + "Overdue compression jobs retained for inspection: " + ", ".join(
+            r["run"] for r in overdue)
     return dict(progress, service=service, checked_at=preserve.utc_now(), warning=warning,
                 last_progress_time=last_progress, alert=alert, controller=controller, metadata_summary_only=True)
 

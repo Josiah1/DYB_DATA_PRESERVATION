@@ -11,6 +11,25 @@ from scripts.check_campaign import status_record
 
 
 class CampaignMonitorTests(unittest.TestCase):
+    def test_overdue_job_warns_without_skipping_inputs_or_hiding_real_errors(self):
+        progress = dict(finished=False, complete=False, artifact_bytes=100,
+                        pending_inputs=16, skipped_inputs=0)
+        service = dict(ActiveState='active', InvocationID='one')
+        controller = dict(heartbeat_time=100, max_jobs=300, max_staged_bytes=400,
+                          reserved_bytes=300, queue=dict(outstanding=1, held=0),
+                          overdue_runs=[dict(run='P17B/EH1/run54964')])
+        report = status_record(progress, service, {}, 100, controller)
+        self.assertIsNone(report['alert'])
+        self.assertIn('Overdue', report['warning'])
+        self.assertIn('run54964', report['warning'])
+        self.assertEqual((report['pending_inputs'], report['skipped_inputs'], report['complete']),
+                         (16, 0, False))
+        controller['error'] = 'checksum mismatch'
+        self.assertIn('checksum mismatch', status_record(progress, service, {}, 100, controller)['alert'])
+        controller['error'] = None
+        controller['overdue_runs'] = []
+        self.assertIsNone(status_record(progress, service, {}, 100, controller)['warning'])
+
     def test_notification_failure_is_separate_from_campaign_health(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

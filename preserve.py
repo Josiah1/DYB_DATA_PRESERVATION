@@ -2081,6 +2081,17 @@ def run_pipeline(args, selected, snapshot, local_root):
                     refresh_pending_holds(local_root, held, active, automatic, not args.drain_staging, args.skip_broken_minis)
 
                 pending = [r for key, r in expected.items() if key not in done and key not in active]
+                overdue = []
+                for key, run in active.items():
+                    own = [j for j in pool["jobs"] if j["Iwd"] == run["marker"]["run_dir"]]
+                    if key not in held and own and run["submissions"]:
+                        submitted_at = run["submissions"][-1]["submitted_at"]
+                        elapsed = time.time() - dt.datetime.fromisoformat(submitted_at).timestamp()
+                        if elapsed > args.run_timeout:
+                            overdue.append(dict(run=key, catalog_sha256=run["marker"]["catalog_sha256"],
+                                submitted_at=submitted_at, elapsed_seconds=int(elapsed),
+                                jobs=[dict(cluster_id=j["ClusterId"], proc_id=j["ProcId"],
+                                           state=j["JobStatus"]) for j in own]))
                 report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
                               quota=pool["quota"], reserved_bytes=pool["reserved_bytes"],
                               output_bytes=pool["output_bytes"], staged_runs=len(active),
@@ -2089,6 +2100,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                               pending_runs=len(pending), backpressure=None, error=None,
                               new_run_admission=not args.drain_staging,
                               skip_broken_minis=args.skip_broken_minis,
+                              overdue_runs=overdue,
                               pending_content_checks=sorted(rechecking),
                               held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
                                               status=active[key]["status"],
@@ -2120,7 +2132,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                         elapsed = time.time() - dt.datetime.fromisoformat(run["submissions"][-1]["submitted_at"]).timestamp()
                         expired = elapsed > args.run_timeout
                         if expired and own:
-                            raise RuntimeError("run exceeded wait timeout; jobs retained: " + key)
+                            continue  # Retain writers and report overdue work without blocking other transfers.
                     # Scheduler kills before worker startup can leave no .fail or .running file.
                     retry = not own and (status["state"] == "FAILED" or expired or
                                          marker.get("broken_recovery_submissions") == len(run["submissions"]))
