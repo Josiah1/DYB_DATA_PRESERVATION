@@ -566,3 +566,27 @@ totals, finite nonnegative timing values, exact agreement between each double
 data duration and its integer timestamps, and that no kept AD entry is at or
 below 0.6 MeV; `verify-all` compares each chunk's reported kept entries, source
 entries, source count, and mode with the corresponding timing rows.
+
+## 2026-10-12 scheduler-query recovery
+
+The controller stopped after three read-only `_pool` queries failed with
+`SECMAN:2007:Read failure during security negotiation` against the IHEP
+schedd. Although `condor_q` returned zero, its diagnostic stderr correctly
+prevented treating this as an empty queue. The deeper site-side cause remains
+unconfirmed; no scheduler, credential, source, or compression settings changed.
+
+At 16:09 UTC a successful global query found zero jobs, 127 complete staged
+runs, and no unresolved submission intents. With the archive UUID/rw mount
+validated and the controller lock free, the existing service was restarted
+once. No job or intent was removed or replayed. Both focused read-only retry
+and scheduler-fail-closed tests passed; no pipeline code change was necessary.
+
+By 16:24 UTC, run61335 was checksum-verified and published before its remote
+staging was deleted: 797 finalized runs, 189,546 processed inputs, 919 missing
+and 1,730 broken skips, and 2,440,681,231,170 artifact bytes. Run61360 was
+transferring; 18 single-core jobs were running, including the retained final
+run66638 worker (15/16 chunks verified). Admission remained enabled, bounded
+by the unchanged 300-job/400-GiB limits. Controller PID 722583 held the single
+controller lock, and the checker/timer were healthy. These are dated recovery
+observations, not live status; current evidence is in portable provenance and
+the small ignored `build/oct12-secman-recovery-result.json` checkpoint.
