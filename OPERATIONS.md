@@ -98,6 +98,22 @@ both stdout and stderr. If a transfer finishes while the controller is stopping,
 its verified local metadata is reconciled into the input ledger; staging remains
 for verification and cleanup on resume.
 
+On October 12, submission of run66506 stopped during HepJob's line-26 import of
+`slurm/slurm_sub.py`: CVMFS returned errno 5 before the submission backend was
+imported. No cluster receipt or worker artifacts existed, but the prewritten
+submission intent correctly prevented an uncertain replay. Recovery confirmed
+successful empty global queue queries, no writers, and a readable site module
+with working `hep_sub -h`. Under the existing submission lock, only this proved
+pre-submission failure's intent was cleared; its full original intent/error and
+all 18 prepared chunk-list hashes were retained in `submission-recovery.json`
+inside staging and in portable `provenance/submission-recovery-run66506.json`.
+The full 283-input catalog and its two already recorded missing minis were
+unchanged; the site I/O error added no missing/broken input. The existing service
+then resumed. Never clear an unknown submission intent merely because the queue
+is empty: retain the existing ambiguity guard unless the failure is established
+or the exact scheduler cluster can be adopted. No shared CVMFS package or
+submission code was changed for this recovery.
+
 Mini-only input handling, the immutable catalog, truthful legacy fallback
 metadata, the 0.6-MeV AD cut, all non-AD events, ROOT compression and disk UUID
 remain unchanged. The archive remains in progress with explicitly recorded gaps.
