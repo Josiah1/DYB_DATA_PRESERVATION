@@ -13,22 +13,30 @@ apply a new calibration.
 
 ## ARMuon fields
 
-All fields below retain their original names under `Event/Rec/ARMuon`:
+Under `Event/Rec/ARMuon`, each original field gains the prefix `arm_` in the
+output. For example, input `energy` becomes output `arm_energy`. Values and
+types are unchanged.
 
 | Requirement | Branches |
 | --- | --- |
-| Detector and time | `detector`, `triggerTimeSec`, `triggerTimeNanoSec` |
-| Reconstructed energy | `energy`, `rawEvis` |
-| Position and time | `x`, `y`, `z`, `t` |
-| Direction and time component | `dx`, `dy`, `dz`, `dt` |
-| Reconstruction status | `energyStatus`, `positionStatus`, `directionStatus` |
-| Reconstruction quality | `energyQuality`, `positionQuality`, `directionQuality` |
+| Detector and time | `arm_detector`, `arm_triggerTimeSec`, `arm_triggerTimeNanoSec` |
+| Reconstructed energy | `arm_energy`, `arm_rawEvis` |
+| Position and time | `arm_x`, `arm_y`, `arm_z`, `arm_t` |
+| Direction and time component | `arm_dx`, `arm_dy`, `arm_dz`, `arm_dt` |
+| Reconstruction status | `arm_energyStatus`, `arm_positionStatus`, `arm_directionStatus` |
+| Reconstruction quality | `arm_energyQuality`, `arm_positionQuality`, `arm_directionQuality` |
 
-`site`, `triggerNumber`, and `triggerType` are also kept for event matching.
-The converter adds source identity and the supplied run number. Status and
+`arm_site`, `arm_triggerNumber`, and `arm_triggerType` are also kept for event
+matching. The added `runNumber`, `sourceIndex`, and `sourceEntry` provenance
+fields keep those unprefixed names. Status and
 quality values are copied without interpretation. Apply the reconstruction
 version's validity criteria before using a direction or fitted position;
 zero-valued fields alone do not establish a successful reconstruction.
+
+This naming applies to converter v7. Existing v6 output has unprefixed
+`ARMuon` fields; use the corresponding names when reading those files or
+reconvert the original inputs with v7. AD and calibration field names are
+unchanged.
 
 ## AD and calibration fields
 
@@ -81,15 +89,20 @@ analysis.
 ## Matching ARMuon to other trees
 
 Do not assume that `ARMuon` row `i` describes AD row `i`. Its source may contain
-a separate or differently ordered stream. Use this event identity within a
-converted file:
+a separate or differently ordered stream. Match this identity in `AdSimple`
+or `AdScaled`:
 
 ```text
 sourceIndex, site, detector, triggerNumber, triggerTimeSec, triggerTimeNanoSec
 ```
 
-`AdSimple`, `AdScaled`, and `ARMuon` retain these fields. After finding the
-matching AD row, read `CalibStats` at that AD row to obtain `nHit`. Require one
+to these fields in `ARMuon`, in the same order:
+
+```text
+sourceIndex, arm_site, arm_detector, arm_triggerNumber, arm_triggerTimeSec, arm_triggerTimeNanoSec
+```
+
+After finding the matching AD row, read `CalibStats` at that AD row to obtain `nHit`. Require one
 matching row; report absent or ambiguous matches instead of taking a nearby
 timestamp. `sourceEntry` records a row's original position in its own tree
 and is not an event key across different trees.
@@ -104,6 +117,10 @@ Compute time differences with integer nanoseconds:
 ```cpp
 std::int64_t stamp = std::int64_t(triggerTimeSec) * 1000000000LL
                    + triggerTimeNanoSec;
+
+// The corresponding timestamp in ARMuon uses the prefixed fields.
+std::int64_t arm_stamp = std::int64_t(arm_triggerTimeSec) * 1000000000LL
+                       + arm_triggerTimeNanoSec;
 ```
 
 Converting an epoch timestamp to floating-point seconds before subtraction

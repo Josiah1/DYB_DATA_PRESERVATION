@@ -63,6 +63,14 @@ void compare_muon(const char* result, const char* first, const char* second) {
   for (auto* name : names) {
     auto* out = output.Get<TTree>((std::string("Event/Rec/") + name).c_str());
     assert(out);
+    const bool arm = std::string(name) == "ARMuon";
+    if (arm) assert(out->GetListOfBranches()->GetEntries() == 25);
+    for (auto* object : *out->GetListOfLeaves()) {
+      const std::string field = object->GetName();
+      if (field == "runNumber" || field == "sourceIndex" || field == "sourceEntry") continue;
+      assert((field.find("arm_") == 0) == arm);
+      if (arm) assert(!out->GetBranch(field.substr(4).c_str()));
+    }
     Long64_t offset = 0;
     for (std::size_t s = 0; s < paths.size(); ++s) {
       TFile input(paths[s]);
@@ -76,7 +84,8 @@ void compare_muon(const char* result, const char* first, const char* second) {
           auto* leaf = static_cast<TLeaf*>(object);
           const std::string field = leaf->GetName();
           if (field == "runNumber" || field == "sourceIndex" || field == "sourceEntry") continue;
-          auto* original = in->GetLeaf(field.c_str());
+          const auto original_name = arm ? field.substr(4) : field;
+          auto* original = in->GetLeaf(original_name.c_str());
           assert(original && std::string(original->GetTypeName()) == leaf->GetTypeName());
           assert(std::memcmp(original->GetValuePointer(), leaf->GetValuePointer(),
                              leaf->GetLenType()) == 0);

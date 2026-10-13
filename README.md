@@ -117,12 +117,15 @@ The event trees contain these branches:
 | `CalibStats` | `nHit`, `MiddleTimeRMS`, `Quadrant`, `Q1`, `Q2`, `MaxQ`, `MaxQ_2inchPMT`, `Kurtosis`, `time_PSD_local_RMS` |
 | `AdSimple` | The six event metadata fields above, plus `energy`, `x`, `y`, `z` |
 | `AdScaled` | The six event metadata fields above |
-| `ARMuon` | The six event metadata fields above, plus all 16 reconstruction, status, and quality fields in the [muon schema](docs/muon.md#armuon-fields) |
+| `ARMuon` | The six event metadata fields above, plus all 16 reconstruction, status, and quality fields in the [muon schema](docs/muon.md#armuon-fields), each with the prefix `arm_` |
 
 The three additional muon trees also have `runNumber` (`Int_t`), `sourceIndex`
 (`Long64_t`, zero based), and `sourceEntry` (`Long64_t`, zero based). These
 identify the source row without assuming that `ARMuon` is an aligned friend
-of the AD trees. The expected scalar types in these three trees are `Short_t`
+of the AD trees. These three added provenance names have no prefix. Original
+`ARMuon` fields are written as `arm_site`, `arm_energy`, and so on; input
+branch names remain unchanged. The expected scalar types in these three trees,
+using original field names below, are `Short_t`
 for `site` and `detector`, `UInt_t` for trigger number and type, `Int_t` for
 trigger timestamps and reconstruction status, and `Float_t` for reconstruction
 values and quality. Conversion rejects other types rather than casting them.
@@ -162,7 +165,7 @@ forced process kill can leave `.partial.<pid>` files or a TSV without a final
 ROOT file. Remove leftovers only after checking that no process is writing
 them. A report alone does not establish successful conversion.
 
-`--verify` checks the v6 schema, source accounting, timing, selected AD energies,
+`--verify` checks the v7 schema, source accounting, timing, selected AD energies,
 and muon stream counts and row provenance. It does not compare every output
 value against the original files, verify a good-run list, or prove the input
 catalog complete. Keep the original input list and source data until your

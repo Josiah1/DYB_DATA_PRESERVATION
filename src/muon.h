@@ -18,11 +18,16 @@ std::vector<std::string> muon_fields(std::size_t index) {
   return fields;
 }
 
-TTree* require_muon_tree(TFile& file, std::size_t index) {
+std::string muon_output_name(std::size_t index, const std::string& name) {
+  return index == 2 ? "arm_" + name : name;
+}
+
+TTree* require_muon_tree(TFile& file, std::size_t index, bool output = false) {
   const std::string path = std::string("Event/Rec/") + kMuonTrees[index];
   auto* tree = dynamic_cast<TTree*>(file.Get(path.c_str()));
   if (!tree) throw std::runtime_error("muon mode requires tree: " + path);
-  for (const auto& name : muon_fields(index)) {
+  for (const auto& original : muon_fields(index)) {
+    const auto name = output ? muon_output_name(index, original) : original;
     auto* branch = tree->GetBranch(name.c_str());
     auto* leaf = tree->GetLeaf(name.c_str());
     if (!branch || !leaf || branch->GetListOfLeaves()->GetEntries() != 1 ||
@@ -59,9 +64,11 @@ void copy_muon_tree(TTree* input, TTree*& output, TDirectory* rec_dir,
     output->SetAutoSave(0);
   }
   auto field = [&](const char* name, auto* address, const char* code) {
-    if (!output->GetBranch(name))
-      output->Branch(name, address, (std::string(name) + "/" + code).c_str());
-    if (std::string(input->GetLeaf(name)->GetTypeName()) != output->GetLeaf(name)->GetTypeName())
+    const auto stored_name = muon_output_name(index, name);
+    if (!output->GetBranch(stored_name.c_str()))
+      output->Branch(stored_name.c_str(), address, (stored_name + "/" + code).c_str());
+    if (std::string(input->GetLeaf(name)->GetTypeName()) !=
+        output->GetLeaf(stored_name.c_str())->GetTypeName())
       throw std::runtime_error("unsupported muon branch type: " + std::string(name));
     bind(input, name, address);
   };
@@ -121,7 +128,7 @@ void verify_muon(TFile& file, TTree* sources, Long64_t base_entries) {
   bind(sources, "muonEntries", counts);
   std::array<TTree*, 3> trees{};
   for (std::size_t i = 0; i < trees.size(); ++i) {
-    trees[i] = require_muon_tree(file, i);
+    trees[i] = require_muon_tree(file, i, true);
     require_branches(trees[i], {"runNumber", "sourceIndex", "sourceEntry"});
     bind(trees[i], "runNumber", &run);
     bind(trees[i], "sourceIndex", &source_index);
