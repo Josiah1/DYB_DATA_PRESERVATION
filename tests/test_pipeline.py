@@ -11,6 +11,314 @@ import preserve
 
 
 class PipelineTests(unittest.TestCase):
+    def test_only_known_read_only_query_failures_are_retryable(self):
+        message = 'SECMAN:2007:Read failure during security negotiation.'
+        failure = mock.Mock(returncode=0, stdout='[{"partial": true}]', stderr=(
+            '-- Failed to fetch ads from: schedd06\n' + message))
+        with mock.patch('preserve.subprocess.run', return_value=failure):
+            with self.assertRaises(preserve.SchedulerQueryUnavailable):
+                preserve.scheduler_jobs('/stage')
+        failure.stderr += '\nPermission denied opening quota data'
+        with mock.patch('preserve.subprocess.run', return_value=failure):
+            with self.assertRaises(RuntimeError) as error:
+                preserve.scheduler_jobs('/stage')
+            self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
+        for error in (OSError(5, 'Input/output error'), preserve.subprocess.TimeoutExpired('condor_q', 60)):
+            with self.subTest(error=type(error).__name__), mock.patch('preserve.subprocess.run', side_effect=error):
+                with self.assertRaises(preserve.SchedulerQueryUnavailable if isinstance(error, preserve.subprocess.TimeoutExpired)
+                                       else OSError):
+                    preserve.scheduler_jobs('/stage')
+        for command, helper, extra in (
+                ('_pool', 'pool_status', []),
+                ('_submit', 'submit_run', ['--run-dir', '/stage/run', '--group', 'dyw',
+                                         '--walltime', 'short', '--memory-mb', '1024']),
+                ('_skip_broken', 'skip_broken_minis', ['--run-dir', '/stage/run'])):
+            proof = dict(scheduler_unavailable=message, command=command, phase=preserve.SCHEDULER_QUERY_PHASES[command])
+            with mock.patch('preserve.' + helper, side_effect=preserve.SchedulerQueryUnavailable(message)), \
+                    mock.patch('builtins.print') as output:
+                self.assertEqual(preserve.main([command, '--stage-root', '/stage'] + extra), 75)
+            self.assertEqual(json.loads(output.call_args.args[0]), proof)
+            response = mock.Mock(returncode=75, stdout=json.dumps(proof), stderr='')
+            with mock.patch('preserve.remote_call', return_value=response) as call, mock.patch('preserve.time.sleep'):
+                with self.assertRaises(preserve.SchedulerQueryUnavailable):
+                    preserve.remote_json('host', '/code', [command])
+            self.assertEqual(call.call_count, 3 if command == '_pool' else 1)
+        proof = dict(scheduler_unavailable=message, command='_pool', phase='read_only')
+        responses = [mock.Mock(returncode=75, stdout=json.dumps(proof), stderr=''),
+                     mock.Mock(returncode=255, stdout='', stderr='ssh: Connection reset by peer')]
+        for response in responses:
+            with mock.patch('preserve.remote_call', return_value=response) as call, mock.patch('preserve.time.sleep'):
+                with self.assertRaises(preserve.SchedulerQueryUnavailable):
+                    preserve.remote_json('host', '/code', ['_pool'])
+            self.assertEqual(call.call_count, 3)
+        for response in (mock.Mock(returncode=1, stdout='', stderr='quota Input/output error'),
+                         mock.Mock(returncode=255, stdout='', stderr='Permission denied (publickey)'),
+                         mock.Mock(returncode=255, stdout='', stderr='Permission denied\nConnection reset by peer'),
+                         mock.Mock(returncode=75, stdout='{"scheduler_unavailable": 1}', stderr='')):
+            with mock.patch('preserve.remote_call', return_value=response), mock.patch('preserve.time.sleep'):
+                with self.assertRaises(RuntimeError) as error:
+                    preserve.remote_json('host', '/code', ['_pool'])
+            self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
+        for command in ('_submit', '_skip_broken'):
+            for response in (mock.Mock(returncode=255, stdout='', stderr='ssh: Connection reset by peer'),
+                             mock.Mock(returncode=75, stdout=json.dumps(proof), stderr='')):
+                with mock.patch('preserve.remote_call', return_value=response) as call, mock.patch('preserve.time.sleep'):
+                    with self.assertRaises(RuntimeError) as error:
+                        preserve.remote_json('host', '/code', [command])
+                self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
+                self.assertEqual(call.call_count, 1, 'SSH loss or wrong-phase proof never authorizes mutation replay')
+
+    def test_pre_mutation_scheduler_failure_preserves_intents_good_chunks_and_broken_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            run = stage / 'run'
+            (run / 'status').mkdir(parents=True)
+            (run / 'outputs').mkdir()
+            (run / 'outputs/good.root').write_bytes(b'good')
+            (run / 'status/000000.ok').write_text('verified')
+            (run / 'status/000001.fail').write_text('exact content evidence')
+            marker = dict(chunk_count=2, input_source='mini', skip_missing_minis=True)
+            for intent_present in (False, True):
+                intent = run / 'submission-intent.json'
+                if intent_present:
+                    intent.write_text('{"unknown_submission":true}')
+                before = {str(p.relative_to(run)):p.read_bytes() for p in run.rglob('*') if p.is_file()}
+                with mock.patch('preserve.scheduler_jobs', side_effect=preserve.SchedulerQueryUnavailable('read failure')), \
+                        mock.patch('preserve.subprocess.run') as backend:
+                    with self.assertRaises(preserve.SchedulerQueryUnavailable):
+                        preserve.submit_locked(run, marker, str(stage), 'dyw', 'short', 1024, True, 300)
+                backend.assert_not_called()
+                self.assertEqual({str(p.relative_to(run)):p.read_bytes() for p in run.rglob('*') if p.is_file()}, before)
+                if intent.exists():
+                    intent.unlink()
+            before = {str(p.relative_to(run)):p.read_bytes() for p in run.rglob('*') if p.is_file()}
+            with mock.patch('preserve.load_run', return_value=(run, marker)), \
+                    mock.patch('preserve.scheduler_jobs', side_effect=preserve.SchedulerQueryUnavailable('read failure')), \
+                    mock.patch('preserve.atomic_json') as write, mock.patch('preserve.confirmed_empty_mini_errors') as proof:
+                with self.assertRaises(preserve.SchedulerQueryUnavailable):
+                    preserve.skip_broken_minis(str(run), str(stage))
+            write.assert_not_called()
+            proof.assert_not_called()
+            self.assertEqual({str(p.relative_to(run)):p.read_bytes() for p in run.rglob('*') if p.is_file()}, before)
+
+    def test_pre_mutation_helper_failure_defers_to_fresh_pool_before_resuming(self):
+        record = preserve.inventory_records()[0]
+        for failing_command in ('_submit', '_skip_broken'):
+            with self.subTest(command=failing_command), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                local = root / 'data'
+                local.mkdir()
+                (root / 'provenance').mkdir()
+                extra = ['--skip-broken-minis'] if failing_command == '_skip_broken' else []
+                args = preserve.build_parser().parse_args([
+                    'run', '--local-root', str(local), '--mount-root', str(root),
+                    '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                    '--files-per-job', '2000', '--skip-missing-minis', '--delete-remote-after-sync'] + extra)
+                marker = dict(record, run_dir='/stage/run', code_root='/code', chunk_count=1, files_per_job=2000,
+                              selection=preserve.selection_record('off'), input_source='mini', skip_missing_minis=True,
+                              processed_input_count=record['input_count'], missing_skipped_input_count=0, broken_skipped_input_count=0)
+                run = dict(marker=marker, submissions=[], intent=False,
+                           status=dict(state='FAILED' if extra else 'PENDING', failed=int(bool(extra)), running=0))
+                original = copy.deepcopy(run)
+                queries, failure_at, calls, verified, cleaned = [0], [None], [], set(), []
+
+                def remote(alias, code, arguments):
+                    command = arguments[0]
+                    if command == '_pool':
+                        queries[0] += 1
+                        return copy.deepcopy(dict(runs=[] if cleaned else [run], jobs=[], queue=preserve.queue_counts([]),
+                            reserved_bytes=1, output_bytes=1,
+                            quota=dict(free_bytes=500 * preserve.GIB, used_files=1, limit_files=200000))), 0
+                    calls.append(command)
+                    if command == failing_command and failure_at[0] is None:
+                        failure_at[0] = queries[0]
+                        raise preserve.SchedulerQueryUnavailable(command + ' proved before_mutation read failure')
+                    if command in ('_skip_broken', '_submit'):
+                        self.assertGreater(queries[0], failure_at[0], 'must refresh global writer state before retry')
+                    if command == '_skip_broken':
+                        run['status'].update(state='PENDING', failed=0)
+                        return copy.deepcopy(run), 0
+                    if command == '_submit':
+                        run['status']['state'] = 'COMPLETE'
+                        run['submissions'] = [dict(cluster_id=42, submitted_at=preserve.utc_now())]
+                        return dict(cluster_id=42), 0
+                    if command == '_finalize':
+                        return marker, 0
+                    self.assertEqual(command, '_cleanup')
+                    self.assertIn('run', verified)
+                    cleaned.append('run')
+                    return dict(deleted='/stage/run'), 0
+
+                def sleep(seconds):
+                    if seconds == 60:
+                        report = preserve.load_json(root / 'provenance/controller.json')
+                        self.assertIsNone(report['queue'])
+                        self.assertEqual(report['scheduler_status'], 'unavailable')
+                        self.assertFalse(report['new_run_admission'])
+                        self.assertEqual(run, original)
+                        self.assertEqual(calls, [failing_command])
+
+                def sync(*unused):
+                    verified.add('run')
+                    return dict(files=1, bytes=1, directory='/local/run')
+
+                with mock.patch('preserve.remote_json', side_effect=remote), \
+                        mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                        mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                        mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync), \
+                        mock.patch('preserve.time.sleep', side_effect=sleep):
+                    preserve.run_pipeline(args, [record], {}, local)
+                self.assertEqual(calls.count(failing_command), 2)
+                self.assertEqual(cleaned, ['run'])
+
+    def test_scheduler_outage_pauses_mutations_and_completed_transfer_cleanup_until_fresh_query(self):
+        records = preserve.inventory_records()[:2]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            local = root / 'data'
+            local.mkdir()
+            (root / 'provenance').mkdir()
+            args = preserve.build_parser().parse_args([
+                'run', '--local-root', str(local), '--mount-root', str(root),
+                '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                '--files-per-job', '2000', '--skip-missing-minis', '--delete-remote-after-sync'])
+            args.poll_seconds = 0.001
+            staged, verified, cleaned, submitted = {}, set(), [], []
+            copying, release_copy, published = threading.Event(), threading.Event(), threading.Event()
+            queries, degraded = [0], []
+
+            def prepare(record, state):
+                marker = dict(record, run_dir='/stage/' + record['stem'], code_root='/code',
+                    chunk_count=1, files_per_job=2000, selection=preserve.selection_record('off'),
+                    input_source='mini', skip_missing_minis=True)
+                staged[marker['run_dir']] = dict(marker=marker, submissions=[], intent=False,
+                                                status=dict(state=state, running=0, failed=0))
+                return marker
+
+            first = prepare(records[0], 'COMPLETE')
+            original = copy.deepcopy(staged)
+
+            def remote(alias, code, arguments):
+                command = arguments[0]
+                if command == '_pool':
+                    queries[0] += 1
+                    if queries[0] in (1, 2, 4, 5):
+                        if queries[0] >= 4:
+                            self.assertTrue(copying.wait(2))
+                        raise preserve.SchedulerQueryUnavailable('SECMAN:2007 read failure')
+                    return copy.deepcopy(dict(runs=list(staged.values()), jobs=[], queue=preserve.queue_counts([]),
+                        reserved_bytes=len(staged) * preserve.GIB, output_bytes=0,
+                        quota=dict(free_bytes=500 * preserve.GIB, used_files=1, limit_files=200000))), 0
+                self.assertNotIn(queries[0], (1, 2, 4, 5), 'no mutation using an unknown queue')
+                if command == '_prepare':
+                    self.assertTrue(copying.wait(2))
+                    return prepare(records[1], 'PENDING'), 0
+                directory = arguments[arguments.index('--run-dir') + 1]
+                if command == '_submit':
+                    self.assertEqual(directory, '/stage/' + records[1]['stem'])
+                    self.assertNotIn(directory, submitted)
+                    self.assertNotIn('--resubmit', arguments)
+                    submitted.append(directory)
+                    staged[directory]['submissions'] = [dict(cluster_id=42, submitted_at=preserve.utc_now())]
+                    staged[directory]['status']['state'] = 'COMPLETE'
+                    return dict(cluster_id=42), 0
+                if command == '_finalize':
+                    return staged[directory]['marker'], 0
+                self.assertEqual(command, '_cleanup')
+                self.assertIn(directory, verified, 'checksum verification must precede cleanup')
+                cleaned.append(directory)
+                del staged[directory]
+                return dict(deleted=directory), 0
+
+            def sync(alias, marker, *unused):
+                if marker == first:
+                    copying.set()
+                    self.assertTrue(release_copy.wait(3))
+                verified.add(marker['run_dir'])
+                published.set()
+                return dict(files=1, bytes=1, directory=marker['run_dir'])
+
+            def sleep(seconds):
+                if seconds != 60:
+                    return
+                state = preserve.load_json(root / 'provenance/controller.json')
+                degraded.append(state)
+                self.assertIsNone(state['error'])
+                self.assertIsNone(state['queue'])
+                self.assertIsNone(state['reserved_bytes'])
+                self.assertEqual(state['scheduler_status'], 'unavailable')
+                self.assertGreater(state['heartbeat_time'], 0)
+                self.assertFalse(state['new_run_admission'])
+                self.assertEqual(staged[first['run_dir']], original[first['run_dir']])
+                self.assertEqual(cleaned, [])
+                self.assertEqual(submitted, [])
+                if queries[0] == 4:
+                    release_copy.set()
+                    self.assertTrue(published.wait(2))
+                if queries[0] == 5:
+                    self.assertIn(first['run_dir'], verified, 'published copy waits safely without cleanup')
+
+            with mock.patch('preserve.remote_json', side_effect=remote), \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                    mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                    mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync), \
+                    mock.patch('preserve.time.sleep', side_effect=sleep):
+                preserve.run_pipeline(args, records, {}, local)
+            self.assertEqual([r['scheduler_failures'] for r in degraded], [1, 2, 1, 2])
+            self.assertEqual(len(submitted), 1)
+            self.assertEqual(set(cleaned), verified)
+            self.assertEqual(len(verified), 2)
+            state = preserve.load_json(root / 'provenance/controller.json')
+            self.assertEqual(state['scheduler_status'], 'available')
+            self.assertIsNone(state['scheduler_error'])
+            self.assertIsNone(state['error'])
+            self.assertTrue(state['new_run_admission'])
+
+    def test_scheduler_outage_does_not_hide_concurrent_checksum_failure(self):
+        record = preserve.inventory_records()[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            local = root / 'data'
+            local.mkdir()
+            (root / 'provenance').mkdir()
+            args = preserve.build_parser().parse_args([
+                'run', '--local-root', str(local), '--mount-root', str(root),
+                '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                '--files-per-job', '2000', '--skip-missing-minis', '--delete-remote-after-sync'])
+            args.poll_seconds = 0.001
+            marker = dict(record, run_dir='/stage/run', code_root='/code', chunk_count=1, files_per_job=2000,
+                          selection=preserve.selection_record('off'), input_source='mini', skip_missing_minis=True)
+            run = dict(marker=marker, submissions=[], intent=False, status=dict(state='COMPLETE', failed=0, running=0))
+            failed, queries, cleanup = threading.Event(), [0], []
+
+            def remote(alias, code, arguments):
+                command = arguments[0]
+                if command == '_pool':
+                    queries[0] += 1
+                    if queries[0] > 1:
+                        self.assertTrue(failed.wait(2))
+                        raise preserve.SchedulerQueryUnavailable('SECMAN:2007 read failure')
+                    return dict(runs=[run], jobs=[], queue=preserve.queue_counts([]), reserved_bytes=1,
+                                output_bytes=1, quota={}), 0
+                if command == '_finalize':
+                    return marker, 0
+                cleanup.append(command)
+                raise AssertionError('no cleanup after checksum failure')
+
+            def sync(*unused):
+                failed.set()
+                raise ValueError('checksum mismatch')
+
+            with mock.patch('preserve.remote_json', side_effect=remote), \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                    mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                    mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync), \
+                    mock.patch('preserve.time.sleep'):
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    preserve.run_pipeline(args, [record], {}, local)
+            self.assertEqual(cleanup, [])
+            self.assertIn('checksum mismatch', preserve.load_json(root / 'provenance/controller.json')['error'])
+
     def test_command_diagnostics_and_bounded_read_only_status_retries(self):
         with self.assertRaises(RuntimeError) as error:
             preserve.run_command([sys.executable, '-c',

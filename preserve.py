@@ -73,6 +73,14 @@ SSH_OPTIONS = (
 )
 
 
+class SchedulerQueryUnavailable(RuntimeError):
+    """A known read-only scheduler transport failure; no queue snapshot exists."""
+
+
+# These helpers query before creating/reconciling an intent or changing broken-input state.
+SCHEDULER_QUERY_PHASES = {"_pool": "read_only", "_submit": "before_mutation", "_skip_broken": "before_mutation"}
+
+
 def selection_record(mode):
     if mode not in AD_SELECTION_MODES:
         raise ValueError("AD selection must be 'on' or 'off'")
@@ -644,12 +652,20 @@ def load_run(run_dir, stage_root):
 
 
 def scheduler_jobs(stage_root):
-    result = subprocess.run([
-        "condor_q", "-global", pwd.getpwuid(os.getuid()).pw_name, "-json", "-attributes",
-        "ClusterId,ProcId,JobStatus,RequestCpus,Cmd,Iwd,HoldReason",
-    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+    try:
+        result = subprocess.run([
+            "condor_q", "-global", pwd.getpwuid(os.getuid()).pw_name, "-json", "-attributes",
+            "ClusterId,ProcId,JobStatus,RequestCpus,Cmd,Iwd,HoldReason",
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+    except subprocess.TimeoutExpired as error:
+        raise SchedulerQueryUnavailable("read-only condor_q query timed out after 60 seconds") from error
     if result.returncode or result.stderr.strip():
-        raise RuntimeError("scheduler query failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
+        diagnostics = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+        read_failure = "SECMAN:2007:Read failure during security negotiation."
+        transient = read_failure in diagnostics and all(
+            line == read_failure or line.startswith("-- Failed to fetch ads from:") for line in diagnostics)
+        error_type = SchedulerQueryUnavailable if transient else RuntimeError
+        raise error_type("scheduler query failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
             result.returncode, result.stdout, result.stderr))
     # HTCondor emits nothing for an empty global queue, and may emit one array per schedd.
     pending, jobs = result.stdout.lstrip(), []
@@ -1309,7 +1325,24 @@ def remote_json(alias, code_root, arguments, check=True):
     attempts = 3 if arguments[0] == "_pool" and check else 1
     for attempt in range(1, attempts + 1):
         try:
-            result = remote_call(alias, code_root, arguments, check=check)
+            result = remote_call(alias, code_root, arguments, check=check and arguments[0] not in SCHEDULER_QUERY_PHASES)
+            if check and arguments[0] in SCHEDULER_QUERY_PHASES and result.returncode:
+                if (arguments[0] == "_pool" and result.returncode == 255 and not result.stdout.strip() and
+                        len(result.stderr.strip().splitlines()) == 1 and re.search(
+                        r"Connection (?:reset by peer|timed out)|Broken pipe|"
+                        r"Connection to .+ closed by remote host|Timeout, server .+ not responding",
+                        result.stderr)):
+                    raise SchedulerQueryUnavailable("read-only scheduler SSH transport failed: " + result.stderr.strip())
+                if result.returncode == 75:
+                    failure = json.loads(result.stdout)
+                    if (isinstance(failure, dict) and set(failure) == {"scheduler_unavailable", "command", "phase"} and
+                            failure["command"] == arguments[0] and
+                            failure["phase"] == SCHEDULER_QUERY_PHASES[arguments[0]] and not result.stderr.strip() and
+                            isinstance(failure["scheduler_unavailable"], str) and failure["scheduler_unavailable"]):
+                        raise SchedulerQueryUnavailable("{} scheduler query unavailable ({}): {}".format(
+                            arguments[0], failure["phase"], failure["scheduler_unavailable"]))
+                raise RuntimeError("remote command {} failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
+                    arguments[0], result.returncode, result.stdout, result.stderr))
             lines = [line for line in result.stdout.splitlines() if line.strip()]
             if not lines:
                 raise RuntimeError("remote command returned no JSON: {}".format(result.stderr))
@@ -1989,202 +2022,230 @@ def run_pipeline(args, selected, snapshot, local_root):
     transfer, transferring = None, None
     observed = set()
     report = dict(max_jobs=args.max_jobs, max_staged_bytes=args.max_staged_gib * GIB)
+    scheduler_failures = 0
     # ponytail: one transfer thread bounds disk/network load; increase only after measured transfer saturation.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         try:
             while True:
-                if transfer is not None and transfer.done():
-                    result = transfer.result()  # Any verification/copy failure prevents deletion and further submission.
-                    print("verified local files={} bytes={} path={}".format(
-                        result["files"], result["bytes"], result["directory"]), flush=True)
-                    validate_local_mount(local_root, args.mount_root, args.mount_uuid)
-                    refresh_input_issues(local_root)
-                    if args.delete_remote_after_sync:
-                        deleted = call("_cleanup", transferring, ["--catalog-sha256", transferring["catalog_sha256"]])
-                        print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
-                    done.add(relative(transferring))
-                    transfer, transferring = None, None
-
-                pool = call("_pool")
-                if pool["queue"]["outstanding"] > args.max_jobs:
-                    raise RuntimeError("existing scheduler jobs exceed configured cap; no new jobs submitted")
-                if pool["queue"]["held"]:
-                    raise RuntimeError("held campaign jobs: {}".format([j for j in pool["jobs"] if j["JobStatus"] == 5]))
-                active = {}
-                rechecking = set()
-                for run in pool["runs"]:
-                    marker = run["marker"]
-                    key = relative(marker)
-                    record = expected.get(key)
-                    if (record is None or marker["catalog_sha256"] != record["catalog_sha256"] or
-                            marker["input_count"] != record["input_count"] or
-                            marker["files_per_job"] != args.files_per_job or
-                            marker["code_root"] != args.remote_code_root or
-                            selection_mode(marker["selection"]) != args.ad_selection or
-                            input_source_mode(marker) != args.input_source or
-                            marker.get("skip_missing_minis", False) != args.skip_missing_minis):
-                        raise ValueError("staged run differs from requested fixed campaign: " + key)
-                    if key not in observed:
-                        paths = parse_catalog_inputs((CATALOG_BACKUP_ROOT / (key + ".list")).read_bytes(), key)
-                        recorded_inputs(paths, marker)
-                        refresh_input_issues(local_root, prepared=marker)
-                        print("adopted {} chunks={} gaps={}".format(key, marker["chunk_count"],
-                              len(marker.get("skipped_inputs", []))), flush=True)
-                        observed.add(key)
-                    if key not in done or args.delete_remote_after_sync:
-                        active[key] = run
-                    own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
-                    if (args.skip_broken_minis and key not in explicit_holds and
-                            (run["status"]["failed"] or run.get("broken_recovery_pending")) and
-                            not own and not run["status"]["running"]):
-                        recovery = call("_skip_broken", marker)
-                        if recovery.get("recheck"):
-                            content_rechecks[key] = content_rechecks.get(key, 0) + 1
-                            if content_rechecks[key] > 8:
-                                raise RuntimeError("broken-input snapshot did not settle after 8 rechecks; run retained: " + key)
-                            rechecking.add(key)
-                            continue
-                        content_rechecks.pop(key, None)
-                        run.update(recovery)
-                        run["broken_recovery_pending"] = False
-                        refresh_input_issues(local_root, prepared=run["marker"])
-                        print("recorded broken gaps {}; expected={} processed={} missing={} broken={}; good chunks retained".format(
-                            key, run["marker"]["input_count"], run["marker"]["processed_input_count"],
-                            run["marker"]["missing_skipped_input_count"], run["marker"]["broken_skipped_input_count"]), flush=True)
-                    elif ((args.hold_empty_minis or args.skip_broken_minis) and
-                          key not in explicit_holds and run["status"]["failed"]):
-                        signature = run["status"]["failure_updates"]
-                        if automatic.get(key, {}).get("failure_updates") != signature:
-                            proof = call("_content_errors", marker)
-                            if proof.get("recheck") or proof["failure_updates"] != signature:
-                                # Other workers may publish failures during the read-only ROOT inspection.
+                try:
+                    pool = call("_pool")
+                    scheduler_failures = 0
+                    report.update(scheduler_status="available", scheduler_error=None, scheduler_failures=0,
+                                  scheduler_retry_seconds=None, scheduler_retry_at=None,
+                                  last_scheduler_success_at=pool.get("checked_at", utc_now()))
+                    if pool["queue"]["outstanding"] > args.max_jobs:
+                        raise RuntimeError("existing scheduler jobs exceed configured cap; no new jobs submitted")
+                    if pool["queue"]["held"]:
+                        raise RuntimeError("held campaign jobs: {}".format([j for j in pool["jobs"] if j["JobStatus"] == 5]))
+                    if transfer is not None and transfer.done():
+                        result = transfer.result()  # Any verification/copy failure prevents deletion and further submission.
+                        print("verified local files={} bytes={} path={}".format(
+                            result["files"], result["bytes"], result["directory"]), flush=True)
+                        validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                        refresh_input_issues(local_root)
+                        if args.delete_remote_after_sync:
+                            current = next((r for r in pool["runs"]
+                                            if r["marker"]["run_dir"] == transferring["run_dir"]), None)
+                            if (current is None or current["intent"] or current["status"]["running"] or
+                                    any(j["Iwd"] == transferring["run_dir"] for j in pool["jobs"])):
+                                raise RuntimeError("verified transfer still has possible writers; staging retained")
+                            deleted = call("_cleanup", transferring, ["--catalog-sha256", transferring["catalog_sha256"]])
+                            print("deleted remote staging {}".format(deleted["deleted"]), flush=True)
+                        done.add(relative(transferring))
+                        transfer, transferring = None, None
+                        continue  # Refresh staging/queue after cleanup before another admission or retry.
+                    active = {}
+                    rechecking = set()
+                    for run in pool["runs"]:
+                        marker = run["marker"]
+                        key = relative(marker)
+                        record = expected.get(key)
+                        if (record is None or marker["catalog_sha256"] != record["catalog_sha256"] or
+                                marker["input_count"] != record["input_count"] or
+                                marker["files_per_job"] != args.files_per_job or
+                                marker["code_root"] != args.remote_code_root or
+                                selection_mode(marker["selection"]) != args.ad_selection or
+                                input_source_mode(marker) != args.input_source or
+                                marker.get("skip_missing_minis", False) != args.skip_missing_minis):
+                            raise ValueError("staged run differs from requested fixed campaign: " + key)
+                        if key not in observed:
+                            paths = parse_catalog_inputs((CATALOG_BACKUP_ROOT / (key + ".list")).read_bytes(), key)
+                            recorded_inputs(paths, marker)
+                            refresh_input_issues(local_root, prepared=marker)
+                            print("adopted {} chunks={} gaps={}".format(key, marker["chunk_count"],
+                                  len(marker.get("skipped_inputs", []))), flush=True)
+                            observed.add(key)
+                        if key not in done or args.delete_remote_after_sync:
+                            active[key] = run
+                        own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                        if (args.skip_broken_minis and key not in explicit_holds and
+                                (run["status"]["failed"] or run.get("broken_recovery_pending")) and
+                                not own and not run["status"]["running"]):
+                            recovery = call("_skip_broken", marker)
+                            if recovery.get("recheck"):
                                 content_rechecks[key] = content_rechecks.get(key, 0) + 1
                                 if content_rechecks[key] > 8:
-                                    raise RuntimeError("content-error snapshot did not settle after 8 rechecks; run retained: " + key)
+                                    raise RuntimeError("broken-input snapshot did not settle after 8 rechecks; run retained: " + key)
                                 rechecking.add(key)
                                 continue
-                            if len(proof["issues"]) != run["status"]["failed"]:
-                                raise RuntimeError("incomplete content-error proof: " + key)
                             content_rechecks.pop(key, None)
-                            automatic[key] = proof
-                            print("holding {} pending; confirmed empty-mini errors={}".format(
-                                key, len(proof["issues"])), flush=True)
-                        if args.skip_broken_minis:
-                            rechecking.add(key)  # Proved content errors await the run's existing writers; no mutation yet.
-                held = explicit_holds | recorded_holds | (set(automatic) if args.hold_empty_minis else set())
-                directories = {r["marker"]["run_dir"] for r in pool["runs"]}
-                if any(j["Iwd"] not in directories for j in pool["jobs"]):
-                    raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
-                if held - set(active):
-                    raise RuntimeError("held run has no retained staging: " + ", ".join(sorted(held - set(active))))
-                if held or (args.skip_broken_minis and pending_path.exists()):
-                    refresh_pending_holds(local_root, held, active, automatic, not args.drain_staging, args.skip_broken_minis)
+                            run.update(recovery)
+                            run["broken_recovery_pending"] = False
+                            refresh_input_issues(local_root, prepared=run["marker"])
+                            print("recorded broken gaps {}; expected={} processed={} missing={} broken={}; good chunks retained".format(
+                                key, run["marker"]["input_count"], run["marker"]["processed_input_count"],
+                                run["marker"]["missing_skipped_input_count"], run["marker"]["broken_skipped_input_count"]), flush=True)
+                        elif ((args.hold_empty_minis or args.skip_broken_minis) and
+                              key not in explicit_holds and run["status"]["failed"]):
+                            signature = run["status"]["failure_updates"]
+                            if automatic.get(key, {}).get("failure_updates") != signature:
+                                proof = call("_content_errors", marker)
+                                if proof.get("recheck") or proof["failure_updates"] != signature:
+                                    # Other workers may publish failures during the read-only ROOT inspection.
+                                    content_rechecks[key] = content_rechecks.get(key, 0) + 1
+                                    if content_rechecks[key] > 8:
+                                        raise RuntimeError("content-error snapshot did not settle after 8 rechecks; run retained: " + key)
+                                    rechecking.add(key)
+                                    continue
+                                if len(proof["issues"]) != run["status"]["failed"]:
+                                    raise RuntimeError("incomplete content-error proof: " + key)
+                                content_rechecks.pop(key, None)
+                                automatic[key] = proof
+                                print("holding {} pending; confirmed empty-mini errors={}".format(
+                                    key, len(proof["issues"])), flush=True)
+                            if args.skip_broken_minis:
+                                rechecking.add(key)  # Proved content errors await the run's existing writers; no mutation yet.
+                    held = explicit_holds | recorded_holds | (set(automatic) if args.hold_empty_minis else set())
+                    directories = {r["marker"]["run_dir"] for r in pool["runs"]}
+                    if any(j["Iwd"] not in directories for j in pool["jobs"]):
+                        raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
+                    if held - set(active):
+                        raise RuntimeError("held run has no retained staging: " + ", ".join(sorted(held - set(active))))
+                    if held or (args.skip_broken_minis and pending_path.exists()):
+                        refresh_pending_holds(local_root, held, active, automatic, not args.drain_staging, args.skip_broken_minis)
 
-                pending = [r for key, r in expected.items() if key not in done and key not in active]
-                overdue = []
-                for key, run in active.items():
-                    own = [j for j in pool["jobs"] if j["Iwd"] == run["marker"]["run_dir"]]
-                    if key not in held and own and run["submissions"]:
-                        submitted_at = run["submissions"][-1]["submitted_at"]
-                        elapsed = time.time() - dt.datetime.fromisoformat(submitted_at).timestamp()
-                        if elapsed > args.run_timeout:
-                            overdue.append(dict(run=key, catalog_sha256=run["marker"]["catalog_sha256"],
-                                submitted_at=submitted_at, elapsed_seconds=int(elapsed),
-                                jobs=[dict(cluster_id=j["ClusterId"], proc_id=j["ProcId"],
-                                           state=j["JobStatus"]) for j in own]))
-                report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
-                              quota=pool["quota"], reserved_bytes=pool["reserved_bytes"],
-                              output_bytes=pool["output_bytes"], staged_runs=len(active),
-                              ready_runs=sum(r["status"]["state"] == "COMPLETE" for r in active.values()),
-                              transferring=relative(transferring) if transferring else None,
-                              pending_runs=len(pending), backpressure=None, error=None,
-                              new_run_admission=not args.drain_staging,
-                              skip_broken_minis=args.skip_broken_minis,
-                              overdue_runs=overdue,
-                              pending_content_checks=sorted(rechecking),
-                              held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
-                                              status=active[key]["status"],
-                                              reason="operator hold for existing mini content errors; inputs remain pending")
-                                         for key in sorted(held)])
-                atomic_json(state_path, report)
-                if not active and (not pending or args.drain_staging):
-                    break
+                    pending = [r for key, r in expected.items() if key not in done and key not in active]
+                    overdue = []
+                    for key, run in active.items():
+                        own = [j for j in pool["jobs"] if j["Iwd"] == run["marker"]["run_dir"]]
+                        if key not in held and own and run["submissions"]:
+                            submitted_at = run["submissions"][-1]["submitted_at"]
+                            elapsed = time.time() - dt.datetime.fromisoformat(submitted_at).timestamp()
+                            if elapsed > args.run_timeout:
+                                overdue.append(dict(run=key, catalog_sha256=run["marker"]["catalog_sha256"],
+                                    submitted_at=submitted_at, elapsed_seconds=int(elapsed),
+                                    jobs=[dict(cluster_id=j["ClusterId"], proc_id=j["ProcId"],
+                                               state=j["JobStatus"]) for j in own]))
+                    report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
+                                  quota=pool["quota"], reserved_bytes=pool["reserved_bytes"],
+                                  output_bytes=pool["output_bytes"], staged_runs=len(active),
+                                  ready_runs=sum(r["status"]["state"] == "COMPLETE" for r in active.values()),
+                                  transferring=relative(transferring) if transferring else None,
+                                  pending_runs=len(pending), backpressure=None, error=None,
+                                  new_run_admission=not args.drain_staging,
+                                  skip_broken_minis=args.skip_broken_minis,
+                                  overdue_runs=overdue,
+                                  pending_content_checks=sorted(rechecking),
+                                  held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
+                                                  status=active[key]["status"],
+                                                  reason="operator hold for existing mini content errors; inputs remain pending")
+                                             for key in sorted(held)])
+                    atomic_json(state_path, report)
+                    if not active and (not pending or args.drain_staging):
+                        break
 
-                submitted = False
-                for key, run in active.items():
-                    marker, status = run["marker"], run["status"]
-                    own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
-                    if key in rechecking:
-                        continue
-                    if key in held:
-                        if key in explicit_holds and (own or status["running"]):
-                            raise RuntimeError("held run still has scheduler jobs or worker markers: " + key)
-                        if status["state"] == "COMPLETE":
-                            raise RuntimeError("held run is now complete; inspect before releasing hold: " + key)
-                        continue
-                    if status["state"] == "COMPLETE" and not own and not status["running"]:
-                        if transfer is None:
-                            transferring = marker
-                            transfer = executor.submit(transfer_run, marker)
-                        continue
-                    expired = False
-                    if run["submissions"]:
-                        elapsed = time.time() - dt.datetime.fromisoformat(run["submissions"][-1]["submitted_at"]).timestamp()
-                        expired = elapsed > args.run_timeout
-                        if expired and own:
-                            continue  # Retain writers and report overdue work without blocking other transfers.
-                    # Scheduler kills before worker startup can leave no .fail or .running file.
-                    retry = not own and (status["state"] == "FAILED" or expired or
-                                         marker.get("broken_recovery_submissions") == len(run["submissions"]))
-                    if retry and len(run["submissions"]) - marker.get("broken_recovery_submissions", 0) >= args.max_attempts:
-                        raise RuntimeError("run exhausted submission attempts: " + key)
-                    if run["intent"] or not run["submissions"] or retry:
-                        if pool["queue"]["outstanding"] + marker["chunk_count"] > args.max_jobs:
+                    submitted = False
+                    for key, run in active.items():
+                        marker, status = run["marker"], run["status"]
+                        own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                        if key in rechecking:
                             continue
-                        reason = admission_reason(pool, 0, args.max_jobs, args.max_staged_gib * GIB,
+                        if key in held:
+                            if key in explicit_holds and (own or status["running"]):
+                                raise RuntimeError("held run still has scheduler jobs or worker markers: " + key)
+                            if status["state"] == "COMPLETE":
+                                raise RuntimeError("held run is now complete; inspect before releasing hold: " + key)
+                            continue
+                        if status["state"] == "COMPLETE" and not own and not status["running"]:
+                            if transfer is None:
+                                transferring = marker
+                                transfer = executor.submit(transfer_run, marker)
+                            continue
+                        expired = False
+                        if run["submissions"]:
+                            elapsed = time.time() - dt.datetime.fromisoformat(run["submissions"][-1]["submitted_at"]).timestamp()
+                            expired = elapsed > args.run_timeout
+                            if expired and own:
+                                continue  # Retain writers and report overdue work without blocking other transfers.
+                        # Scheduler kills before worker startup can leave no .fail or .running file.
+                        retry = not own and (status["state"] == "FAILED" or expired or
+                                             marker.get("broken_recovery_submissions") == len(run["submissions"]))
+                        if retry and len(run["submissions"]) - marker.get("broken_recovery_submissions", 0) >= args.max_attempts:
+                            raise RuntimeError("run exhausted submission attempts: " + key)
+                        if run["intent"] or not run["submissions"] or retry:
+                            if pool["queue"]["outstanding"] + marker["chunk_count"] > args.max_jobs:
+                                continue
+                            reason = admission_reason(pool, 0, args.max_jobs, args.max_staged_gib * GIB,
+                                                      shutil.disk_usage(local_root).free)
+                            if reason:
+                                report["backpressure"] = reason
+                                continue
+                            extra = ["--group", args.group, "--walltime", args.walltime,
+                                     "--memory-mb", str(args.memory_mb), "--max-jobs", str(args.max_jobs)]
+                            if retry:
+                                extra.append("--resubmit")
+                                if expired:
+                                    print("retrying expired incomplete run {}; no scheduler jobs remain; "
+                                          "verified chunks retained".format(key), flush=True)
+                            submission = call("_submit", marker, extra)
+                            print("submitted/adopted {} cluster {}".format(key, submission["cluster_id"]), flush=True)
+                            submitted = True
+                            break  # Refresh real queue counts before another submission.
+                    if submitted:
+                        continue
+                    if active.keys() == held and not rechecking and (not pending or args.drain_staging):
+                        raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
+                    if any(r["status"]["failed"] for key, r in active.items() if key not in held and key not in rechecking):
+                        raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
+                    if report["backpressure"] and not pool["jobs"] and transfer is None:
+                        raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
+                    if pending and not args.drain_staging:
+                        record = pending[0]
+                        chunks = math.ceil(record["input_count"] / args.files_per_job)
+                        reason = admission_reason(pool, chunks, args.max_jobs, args.max_staged_gib * GIB,
                                                   shutil.disk_usage(local_root).free)
-                        if reason:
-                            report["backpressure"] = reason
+                        report["backpressure"] = reason
+                        if not reason:
+                            validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                            options = ["--catalog", record["catalog"], "--period", record["period"],
+                                       "--hall", record["hall"], "--code-root", args.remote_code_root,
+                                       "--files-per-job", str(args.files_per_job), "--ad-selection", args.ad_selection,
+                                       "--input-source", args.input_source]
+                            if args.skip_missing_minis:
+                                options.append("--skip-missing-minis")
+                            call("_prepare", extra=options)
                             continue
-                        extra = ["--group", args.group, "--walltime", args.walltime,
-                                 "--memory-mb", str(args.memory_mb), "--max-jobs", str(args.max_jobs)]
-                        if retry:
-                            extra.append("--resubmit")
-                            if expired:
-                                print("retrying expired incomplete run {}; no scheduler jobs remain; "
-                                      "verified chunks retained".format(key), flush=True)
-                        submission = call("_submit", marker, extra)
-                        print("submitted/adopted {} cluster {}".format(key, submission["cluster_id"]), flush=True)
-                        submitted = True
-                        break  # Refresh real queue counts before another submission.
-                if submitted:
+                        if not active:
+                            raise RuntimeError("cannot admit next run: " + reason)
+                    atomic_json(state_path, report)
+                    time.sleep(args.poll_seconds)
+                except SchedulerQueryUnavailable as error:
+                    validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                    if transfer is not None and transfer.done():
+                        transfer.result()  # A concurrent checksum/copy failure remains fatal during an outage.
+                    scheduler_failures += 1
+                    report.update(checked_at=utc_now(), heartbeat_time=time.time(), error=None,
+                                  scheduler_status="unavailable", scheduler_error=str(error),
+                                  scheduler_failures=scheduler_failures, scheduler_retry_seconds=60,
+                                  scheduler_retry_at=time.time() + 60, queue=None, quota=None,
+                                  reserved_bytes=None, output_bytes=None, staged_runs=None, ready_runs=None,
+                                  overdue_runs=[], transferring=relative(transferring) if transferring else None,
+                                  new_run_admission=False, backpressure="scheduler query unavailable")
+                    atomic_json(state_path, report)
+                    print("{} scheduler unavailable; queue unknown; submissions/cleanup paused; retry in 60s".format(
+                        utc_now()), flush=True)
+                    time.sleep(60)
                     continue
-                if active.keys() == held and not rechecking and (not pending or args.drain_staging):
-                    raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
-                if any(r["status"]["failed"] for key, r in active.items() if key not in held and key not in rechecking):
-                    raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
-                if report["backpressure"] and not pool["jobs"] and transfer is None:
-                    raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
-                if pending and not args.drain_staging:
-                    record = pending[0]
-                    chunks = math.ceil(record["input_count"] / args.files_per_job)
-                    reason = admission_reason(pool, chunks, args.max_jobs, args.max_staged_gib * GIB,
-                                              shutil.disk_usage(local_root).free)
-                    report["backpressure"] = reason
-                    if not reason:
-                        validate_local_mount(local_root, args.mount_root, args.mount_uuid)
-                        options = ["--catalog", record["catalog"], "--period", record["period"],
-                                   "--hall", record["hall"], "--code-root", args.remote_code_root,
-                                   "--files-per-job", str(args.files_per_job), "--ad-selection", args.ad_selection,
-                                   "--input-source", args.input_source]
-                        if args.skip_missing_minis:
-                            options.append("--skip-missing-minis")
-                        call("_prepare", extra=options)
-                        continue
-                    if not active:
-                        raise RuntimeError("cannot admit next run: " + reason)
-                atomic_json(state_path, report)
-                time.sleep(args.poll_seconds)
         except BaseException as error:
             report.update(checked_at=utc_now(), heartbeat_time=time.time(), error=str(error))
             atomic_json(state_path, report)
@@ -2381,6 +2442,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         return args.function(args)
+    except SchedulerQueryUnavailable as error:
+        phase = SCHEDULER_QUERY_PHASES.get(args.command)
+        if phase is None:
+            print("ERROR: {}".format(error), file=sys.stderr)
+            return 1
+        print(json.dumps(dict(scheduler_unavailable=str(error), command=args.command, phase=phase)))
+        return 75  # Explicit proved pre-mutation/read-only failure, never an empty successful queue.
     except (KeyError, OSError, RuntimeError, TypeError, ValueError, subprocess.TimeoutExpired) as error:
         print("ERROR: {}".format(error), file=sys.stderr)
         return 1

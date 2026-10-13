@@ -25,8 +25,9 @@ array with no jobs in a successful global scheduler query uses the existing
 bounded retry (two submissions maximum), rather than stopping forever on the
 old submission timestamp. The submission helper independently rechecks that
 no jobs remain before retrying; workers reopen and verify completed chunks,
-then reuse them. Exhausted attempts, held jobs and query errors still stop
-safely. This is job recovery, never a missing-mini skip;
+then reuse them. Exhausted attempts and held jobs still stop safely; the known
+scheduler transport outages described below pause and retry automatically.
+This is job recovery, never a missing-mini skip;
 catalogs, gaps and verified outputs stay intact. The scheduler class and its
 30-minute limit are unchanged.
 
@@ -92,11 +93,36 @@ rehashing remains available through `verify-all`. Any staged copy left after a
 restart must still pass local artifact hashes before cleanup.
 
 Read-only `_pool` snapshot failures retry twice, after 1 and 2 seconds, logging
-each failure with its timestamp. Persistent failure stops the controller without
-using stale status or replaying a submission/cleanup. Command failures preserve
-both stdout and stderr. If a transfer finishes while the controller is stopping,
-its verified local metadata is reconciled into the input ledger; staging remains
-for verification and cleanup on resume.
+each failure with its timestamp. Since the October 13 recovery, a recognized
+`SECMAN:2007:Read failure during security negotiation` diagnostic (without other
+unknown stderr), a bounded `condor_q` timeout, or an explicitly recognized
+read-only SSH transport disconnect leaves the controller alive and retries
+after 60 seconds. `scheduler_status: unavailable`, `scheduler_error`, retry
+time/count and a fresh local heartbeat remain visible. Queue, quota, staged
+counts and byte reservations become `null`, never zero or stale live counts.
+New admission, submissions, content mutation and staging cleanup pause until a
+fresh successful global query. The checker warns about the unknown queue and
+automatic retry; stopped heartbeats, fatal errors and prolonged lack of verified
+output still alert normally.
+
+`_submit` and `_skip_broken` independently query before intent creation or
+reconciliation, broken-input journaling, or output changes. Only a structured
+exit-75 response naming that exact command and `before_mutation` phase permits
+the same safe deferral. Each mutable helper still gets one SSH attempt; SSH loss
+during mutation, ambiguous intents and unrecognized failures stop for inspection.
+The next controller cycle always obtains fresh global writer state before retrying.
+An already authorized transfer may finish during the outage, but its staging
+cannot be deleted until a fresh successful query confirms no jobs, worker
+markers or unresolved intent remain. A concurrent checksum/copy failure remains
+fatal. No queue failure is classified as a missing or broken input.
+
+The October 13 regression exercises repeated failed query cycles before work
+and after a verified transfer publishes, deferred cleanup, eventual admission
+and transfer recovery, both pre-mutation helpers, preserved intents/good chunks,
+rejected ambiguous SSH failures, and monitor warning/recovery. All 21 focused
+pipeline, monitor, existing broken-run and content-hold checks passed. The
+incident baseline was 817 verified runs; compact deployment and live recovery
+evidence is kept in ignored `build/oct13-scheduler-recovery-result.json`.
 
 On October 12, submission of run66506 stopped during HepJob's line-26 import of
 `slurm/slurm_sub.py`: CVMFS returned errno 5 before the submission backend was
