@@ -10,12 +10,14 @@ Two profiles are available for antineutrino detector (AD) and muon analyses:
 | Profile | Required input | Event retention |
 | --- | --- | --- |
 | `mini` (default) | `AdSimpleNL` and `CalibStats` | All entries by default; optional raw `AdSimpleNL.energy > 0.6 MeV` cut for ADs |
-| `muon` | Original reconstruction files containing the five trees listed below | All entries in all five trees |
+| `muon` | `AdSimpleNL`, `CalibStats`, and `ARMuon` | All entries in these three trees |
 
-Muon mode preserves the `ARMuon` fields, `AdSimple` energy and position, and
-`AdScaled` metadata needed by the [muon-analysis guide](docs/muon.md).
-A mini file without those trees cannot supply that information. Muon mode
-stops if a required tree or field is absent.
+AD energy, position, and event metadata all come from `AdSimpleNL`, as in the
+base converter. `AdSimple`, `AdScaled`, and `AdScaledNL` are neither required
+nor stored. Muon mode adds the `ARMuon` fields described in the
+[muon-analysis guide](docs/muon.md). A mini file without `ARMuon` cannot supply
+that information; use an original reconstruction file containing it. Muon
+mode stops if a required tree or field is absent.
 
 ## Build and test
 
@@ -47,7 +49,8 @@ make test PYTHON=/path/to/python3
 The tests generate small files in a temporary directory and remove them after
 use. They check event selection, values and types in all added muon fields,
 multiple input files, independent `ARMuon` ordering, failure cleanup, and
-refusal to overwrite existing outputs.
+refusal to overwrite existing outputs. Conflicting values in unused AD
+reconstruction trees are checked to have no effect on the output.
 
 ## Convert one run
 
@@ -84,7 +87,7 @@ analysis accepts discarding AD entries with raw `AdSimpleNL.energy <= 0.6 MeV`
 or NaN. The cut applies to detector codes 1 through 4. Every other detector
 entry is retained, regardless of energy or `nHit`. The default is `off`.
 Muon mode requires `--ad-selection off`; it retains all AD and water-pool
-entries, including the PDF's `AdSimple.energy > 20 MeV` and `nHit > 5` samples.
+entries, including the `AdSimpleNL.energy > 20 MeV` and `nHit > 5` samples.
 
 Run one conversion per output path. Both output names must be new and their
 parent directories must exist. Output filesystems must support hard links.
@@ -97,8 +100,6 @@ the converter does not silently skip files or remove originals.
 Event/
   Rec/
     AdSimpleNL       # both profiles
-    AdSimple         # muon profile
-    AdScaled         # muon profile
     ARMuon           # muon profile
   Data/
     CalibStats       # both profiles
@@ -115,16 +116,14 @@ The event trees contain these branches:
 | --- | --- |
 | `AdSimpleNL` | `site`, `detector`, `triggerType`, `triggerNumber`, `triggerTimeSec`, `triggerTimeNanoSec`, `energy`, `x`, `y`, `z`; added `runNumber` |
 | `CalibStats` | `nHit`, `MiddleTimeRMS`, `Quadrant`, `Q1`, `Q2`, `MaxQ`, `MaxQ_2inchPMT`, `Kurtosis`, `time_PSD_local_RMS` |
-| `AdSimple` | The six event metadata fields above, plus `energy`, `x`, `y`, `z` |
-| `AdScaled` | The six event metadata fields above |
 | `ARMuon` | The six event metadata fields above, plus all 16 reconstruction, status, and quality fields in the [muon schema](docs/muon.md#armuon-fields), each with the prefix `arm_` |
 
-The three additional muon trees also have `runNumber` (`Int_t`), `sourceIndex`
+`ARMuon` also has `runNumber` (`Int_t`), `sourceIndex`
 (`Long64_t`, zero based), and `sourceEntry` (`Long64_t`, zero based). These
 identify the source row without assuming that `ARMuon` is an aligned friend
-of the AD trees. These three added provenance names have no prefix. Original
+of `AdSimpleNL`. These three added provenance names have no prefix. Original
 `ARMuon` fields are written as `arm_site`, `arm_energy`, and so on; input
-branch names remain unchanged. The expected scalar types in these three trees,
+branch names remain unchanged. The expected scalar types in `ARMuon`,
 using original field names below, are `Short_t`
 for `site` and `detector`, `UInt_t` for trigger number and type, `Int_t` for
 trigger timestamps and reconstruction status, and `Float_t` for reconstruction
@@ -132,8 +131,7 @@ values and quality. Conversion rejects other types rather than casting them.
 
 `AdSimpleNL` and `CalibStats` use the same retained row order. Their input
 entry counts must agree; the input format must already pair calibration and
-reconstruction entries. In muon mode, `AdSimple` and `AdScaled` must also have
-the same entry count and the same six event metadata values at each row.
+reconstruction entries.
 `ARMuon` is copied in its own order, with no requirement that its count equal
 the AD count. See the guide before joining it to calibration data.
 
@@ -151,7 +149,7 @@ the AD count. See the guide before joining it to calibration data.
 | `processingWallSeconds`, `processingCpuSeconds` | Time spent converting that source |
 | `adBelow0p3MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` at or below 0.3 MeV, including NaN |
 | `adFrom0p3To0p6MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` above 0.3 and at or below 0.6 MeV |
-| `muonEntries[3]` | Muon mode only: source counts for `AdSimple`, `AdScaled`, `ARMuon`, in that order |
+| `muonEntries` | Muon mode only: number of `ARMuon` entries in this source (`Long64_t`) |
 
 The tab-separated (TSV) report contains the base-tree counts, timing, byte size, and per-AD
 energy-bin counts. The extra `muonEntries` counts are stored in the ROOT
@@ -165,7 +163,7 @@ forced process kill can leave `.partial.<pid>` files or a TSV without a final
 ROOT file. Remove leftovers only after checking that no process is writing
 them. A report alone does not establish successful conversion.
 
-`--verify` checks the v7 schema, source accounting, timing, selected AD energies,
+`--verify` checks the v8 schema, source accounting, timing, selected AD energies,
 and muon stream counts and row provenance. It does not compare every output
 value against the original files, verify a good-run list, or prove the input
 catalog complete. Keep the original input list and source data until your
@@ -177,7 +175,6 @@ metadata contract and should be verified with their corresponding executable.
 | Error | Action |
 | --- | --- |
 | `muon mode requires tree` or `scalar numeric branch` | Inspect the input with ROOT; use an original reconstruction file containing the named tree and field |
-| `AD reconstruction event identities differ` | Check that the input trees describe the same ordered readouts; do not join them by row number |
 | `tree entry mismatch` | Inspect the source file for incomplete or mismatched reconstruction/calibration trees |
 | `refusing to overwrite` | Choose new output names or inspect and remove only an unwanted previous result |
 | `cannot atomically publish` | Check permissions, free space, hard-link support, and whether another process created the destination |

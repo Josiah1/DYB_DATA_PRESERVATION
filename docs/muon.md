@@ -1,15 +1,18 @@
 # Muon-analysis fields and event matching
 
-Use `--profile muon` with original reconstruction files. This profile preserves
-the field requirements in `dyb.pdf`, pages 2 and 3 (13 October 2026). It keeps
-all entries, so the requested pool sample with `NPmt > 5` and AD sample with
-`AdSimple.energy > 20 MeV` remain available for analysis cuts.
+Use `--profile muon` with files containing `AdSimpleNL`, `CalibStats`, and
+`ARMuon`. This profile keeps all entries in those trees, so the pool sample
+with `NPmt > 5` and the AD sample with `AdSimpleNL.energy > 20 MeV` remain
+available for analysis cuts.
 
-The mini profile supplies the existing `AdSimpleNL` and `CalibStats` fields.
-It cannot recover `ARMuon` or a different AD reconstruction from a mini file
-that omitted those trees. `AdSimple.energy` and `AdSimpleNL.energy` are separate
-stored quantities; the converter does not substitute one for the other or
-apply a new calibration.
+All AD energy, position, and event metadata are read from `AdSimpleNL`.
+The shared branch names in `AdSimple`, `AdScaled`, and `AdScaledNL` are not
+read or duplicated. The converter applies no new energy calibration.
+
+The `ARMuon` fields follow `dyb.pdf`, page 2, and the AD/calibration mapping
+below uses the stream variables on page 3 (13 October 2026), with `AdSimpleNL`
+as the AD reconstruction source. Muon mode requires the original reconstruction
+files when the minis omit `ARMuon`.
 
 ## ARMuon fields
 
@@ -33,10 +36,10 @@ quality values are copied without interpretation. Apply the reconstruction
 version's validity criteria before using a direction or fitted position;
 zero-valued fields alone do not establish a successful reconstruction.
 
-This naming applies to converter v7. Existing v6 output has unprefixed
-`ARMuon` fields; use the corresponding names when reading those files or
-reconvert the original inputs with v7. AD and calibration field names are
-unchanged.
+Converter v8 stores `AdSimpleNL`, `CalibStats`, and `ARMuon`. Earlier v6/v7
+muon output also contained `AdSimple` and `AdScaled`; v6 used unprefixed
+`ARMuon` names. For new output, point AD readers at `AdSimpleNL` and use
+the prefixed muon names. Existing files retain their original schema.
 
 ## AD and calibration fields
 
@@ -44,16 +47,16 @@ The stream variables requested on page 3 map to the output as follows:
 
 | Stream variable | Output branch |
 | --- | --- |
-| `Run` | `Event/Rec/AdSimple.runNumber`, supplied by `--run-number` |
-| `Site`, `Det` | `Event/Rec/AdScaled.site`, `.detector` |
-| `TrigNum`, `TrigType` | `Event/Rec/AdScaled.triggerNumber`, `.triggerType` |
-| `TrigSec`, `TrigNano` | `Event/Rec/AdScaled.triggerTimeSec`, `.triggerTimeNanoSec` |
+| `Run` | `Event/Rec/AdSimpleNL.runNumber`, supplied by `--run-number` |
+| `Site`, `Det` | `Event/Rec/AdSimpleNL.site`, `.detector` |
+| `TrigNum`, `TrigType` | `Event/Rec/AdSimpleNL.triggerNumber`, `.triggerType` |
+| `TrigSec`, `TrigNano` | `Event/Rec/AdSimpleNL.triggerTimeSec`, `.triggerTimeNanoSec` |
 | `NPmt` | `Event/Data/CalibStats.nHit` |
 | `TRms` | `Event/Data/CalibStats.MiddleTimeRMS` |
 | `Quadrant`, `Q1`, `Q2` | Same-named branches in `Event/Data/CalibStats` |
 | `QMax2Sum` | `Event/Data/CalibStats.MaxQ` |
 | `MaxQ2Inch` | `Event/Data/CalibStats.MaxQ_2inchPMT` |
-| `E`, `X`, `Y`, `Z` | `Event/Rec/AdSimple.energy`, `.x`, `.y`, `.z` |
+| `E`, `X`, `Y`, `Z` | `Event/Rec/AdSimpleNL.energy`, `.x`, `.y`, `.z` |
 
 The original instruction marks the run index, `nHit`, and `MaxQ` mappings with
 question marks. The converter preserves these named quantities and records
@@ -63,12 +66,12 @@ derived observables.
 
 ## Reading the AD and pool samples
 
-The AD trees and `CalibStats` have aligned output entries in muon mode. A ROOT
+`AdSimpleNL` and `CalibStats` have aligned output entries in muon mode. A ROOT
 session can inspect the requested selections directly:
 
 ```cpp
 TFile f("output/run21221.root");
-auto ad = f.Get<TTree>("Event/Rec/AdSimple");
+auto ad = f.Get<TTree>("Event/Rec/AdSimpleNL");
 auto stats = f.Get<TTree>("Event/Data/CalibStats");
 ad->AddFriend(stats, "calib");
 
@@ -89,18 +92,23 @@ analysis.
 ## Matching ARMuon to other trees
 
 Do not assume that `ARMuon` row `i` describes AD row `i`. Its source may contain
-a separate or differently ordered stream. Match this identity in `AdSimple`
-or `AdScaled`:
+a separate or differently ordered stream. Match these `AdSimpleNL` fields
+within the same source file:
 
 ```text
-sourceIndex, site, detector, triggerNumber, triggerTimeSec, triggerTimeNanoSec
+site, detector, triggerNumber, triggerTimeSec, triggerTimeNanoSec
 ```
 
 to these fields in `ARMuon`, in the same order:
 
 ```text
-sourceIndex, arm_site, arm_detector, arm_triggerNumber, arm_triggerTimeSec, arm_triggerTimeNanoSec
+arm_site, arm_detector, arm_triggerNumber, arm_triggerTimeSec, arm_triggerTimeNanoSec
 ```
+
+For `ARMuon`, `sourceIndex` identifies the source directly. For `AdSimpleNL`,
+find the row of `Preservation/Sources` whose output range contains the AD
+entry: `firstEntry <= entry < firstEntry + keptEntries`. That provenance
+row's zero-based index is the corresponding source index.
 
 After finding the matching AD row, read `CalibStats` at that AD row to obtain `nHit`. Require one
 matching row; report absent or ambiguous matches instead of taking a nearby

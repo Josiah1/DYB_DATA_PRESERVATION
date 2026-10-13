@@ -246,7 +246,7 @@ class ConverterTests(unittest.TestCase):
 
     def test_incomplete_muon_input_fails_without_publishing(self):
         self.root_call('add_muon("{}");'.format(self.sources[0]))
-        for fault in ("missing", "count", "identity", "type"):
+        for fault in ("missing", "type"):
             with self.subTest(fault=fault):
                 self.root_call('add_muon("{}", "{}");'.format(self.sources[1], fault))
                 result, output, report = self.run_muon(fault)
@@ -254,6 +254,14 @@ class ConverterTests(unittest.TestCase):
                 self.assertFalse(output.exists())
                 self.assertFalse(report.exists())
                 self.assertFalse(list(self.root.glob("*.partial.*")))
+
+    def test_other_ad_reconstructions_are_ignored(self):
+        for source in self.sources:
+            self.root_call('add_muon("{}"); add_unused_ad_trees("{}");'.format(source, source))
+        result, output, report = self.run_muon()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.check_report(report, "off")
+        self.root_call('compare_muon("{}", "{}", "{}");'.format(output, *self.sources))
 
     def test_missing_muon_trees_and_selection_conflict(self):
         for args in ((), ("--ad-selection", "on"), ("--run-number", "123junk")):

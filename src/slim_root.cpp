@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 #include <chrono>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -27,7 +26,7 @@
 namespace {
 constexpr int kCompressionSettings = 509;  // ROOT ZSTD level 9.
 constexpr int kBasketBytes = 256 * 1024;
-constexpr const char* kVersion = "dyb-slim-v7";
+constexpr const char* kVersion = "dyb-slim-v8";
 constexpr int kAdCount = 4;              // AD detector codes 1-4.
 constexpr double kAdMinEnergyMeV = 0.6;
 constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.6].
@@ -191,7 +190,7 @@ long long verify_file(const std::string& path) {
     if (is_ad(detector) && ad_class(energy) != 0)
       throw std::runtime_error("output holds an AD entry at or below the selection threshold: " + path);
   }
-  if (muon) verify_muon(file, sources, ad->GetEntries());
+  if (muon) verify_muon(file, sources);
   std::cout << "VERIFY entries=" << ad->GetEntries() << " source_entries=" << total_source_entries
             << " sources=" << sources->GetEntries() << " selection=" << (enabled ? "on" : "off")
             << " bytes=" << file_size(path) << '\n';
@@ -248,9 +247,9 @@ void convert(const std::string& input_list, const std::string& output_path,
     Int_t trigger_sec = 0, trigger_nano = 0, n_hit = 0;
     Int_t stored_run_number = run_number;
     Long64_t muon_source_index = 0, muon_source_entry = 0;
-    Long64_t muon_entries[3] = {0};
-    std::array<TTree*, 3> muon_outputs{};
-    std::array<MuonRow, 3> muon_rows{};
+    Long64_t muon_entries = 0;
+    TTree* muon_output = nullptr;
+    MuonRow muon_row;
     Float_t energy = 0, x = 0, y = 0, z = 0;
     Float_t middle_time_rms = 0, quadrant = 0, q1 = 0, q2 = 0, max_q = 0;
     Float_t max_q_2inch = 0, kurtosis = 0, time_psd_local_rms = 0;
@@ -304,7 +303,7 @@ void convert(const std::string& input_list, const std::string& output_path,
     sources.Branch("processingCpuSeconds", &processing_cpu_seconds, "processingCpuSeconds/D");
     sources.Branch("adBelow0p3MeV", ad_below, "adBelow0p3MeV[4]/L");
     sources.Branch("adFrom0p3To0p6MeV", ad_band, "adFrom0p3To0p6MeV[4]/L");
-    if (muon) sources.Branch("muonEntries", muon_entries, "muonEntries[3]/L");
+    if (muon) sources.Branch("muonEntries", &muon_entries, "muonEntries/L");
 
     for (TTree* tree : {&ad, &calib, &sources}) {
       tree->SetAutoFlush(0);
@@ -323,10 +322,7 @@ void convert(const std::string& input_list, const std::string& output_path,
       if (!simple || !stats) throw std::runtime_error("missing required tree: " + input_path);
       if (simple->GetEntries() != stats->GetEntries())
         throw std::runtime_error("tree entry mismatch: " + input_path);
-      std::array<TTree*, 3> muon_inputs{};
-      if (muon)
-        for (std::size_t i = 0; i < muon_inputs.size(); ++i)
-          muon_inputs[i] = require_muon_tree(input_file, i);
+      auto* muon_input = muon ? require_muon_tree(input_file) : nullptr;
 
       simple->SetBranchStatus("*", false);
       bind(simple, "site", &site);
@@ -382,11 +378,9 @@ void convert(const std::string& input_list, const std::string& output_path,
         throw std::runtime_error("cannot flush output events");
       if (muon) {
         muon_source_index = static_cast<Long64_t>(source_index);
-        for (std::size_t i = 0; i < muon_inputs.size(); ++i) {
-          muon_entries[i] = muon_inputs[i]->GetEntries();
-          copy_muon_tree(muon_inputs[i], muon_outputs[i], rec_dir, i, stored_run_number,
-                         muon_source_index, muon_source_entry, simple, muon_rows[i]);
-        }
+        muon_entries = muon_input->GetEntries();
+        copy_muon_tree(muon_input, muon_output, rec_dir, stored_run_number,
+                       muon_source_index, muon_source_entry, muon_row);
       }
       input_file.Close();
 
@@ -418,8 +412,7 @@ void convert(const std::string& input_list, const std::string& output_path,
 
     rec_dir->cd();
     if (ad.Write() <= 0) throw std::runtime_error("cannot write AD tree");
-    for (auto* tree : muon_outputs)
-      if (tree && tree->Write() <= 0) throw std::runtime_error("cannot write muon tree");
+    if (muon_output && muon_output->Write() <= 0) throw std::runtime_error("cannot write muon tree");
     data_dir->cd();
     if (calib.Write() <= 0) throw std::runtime_error("cannot write CalibStats tree");
     preservation_dir->cd();
@@ -475,7 +468,7 @@ int main(int argc, char** argv) {
         "usage: slim-root --input-list FILE --output FILE --source-report FILE "
         "--run-number NUMBER [--ad-selection on|off] [--profile mini|muon]\n"
         "       slim-root --verify FILE | --version | --help\n"
-        "Muon mode requires AdSimple, AdScaled and ARMuon, and --ad-selection off.";
+        "Muon mode requires AdSimpleNL, CalibStats and ARMuon, and --ad-selection off.";
     if (argc == 2 && std::string(argv[1]) == "--help") {
       std::cout << usage << '\n';
       return 0;

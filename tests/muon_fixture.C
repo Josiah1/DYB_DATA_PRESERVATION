@@ -11,13 +11,6 @@ void add_muon(const char* path, const char* fault = "") {
   auto* base = file.Get<TTree>("Event/Rec/AdSimpleNL");
   file.cd("Event/Rec");
   base->SetBranchStatus("unusedBranch", false);
-  Float_t energy = 0, x = 0;
-  base->SetBranchAddress("energy", &energy);
-  base->SetBranchAddress("x", &x);
-  auto* simple = base->CloneTree(0);
-  simple->SetName("AdSimple");
-  auto* scaled = base->CloneTree(0);
-  scaled->SetName("AdScaled");
   auto* arm = base->CloneTree(0);
   arm->SetName("ARMuon");
   Float_t values[12] = {};
@@ -34,13 +27,6 @@ void add_muon(const char* path, const char* fault = "") {
       arm->Branch(floats[i].c_str(), &values[i], (floats[i] + "/F").c_str());
   for (std::size_t i = 0; i < ints.size(); ++i)
     arm->Branch(ints[i].c_str(), &status[i], (ints[i] + "/I").c_str());
-  for (Long64_t e = 0; e < base->GetEntries(); ++e) {
-    base->GetEntry(e);
-    energy = 21.f + e; x += 1000;
-    simple->Fill();
-    if (std::string(fault) == "identity" && e == 0) base->GetEntry(1);
-    scaled->Fill();
-  }
   if (std::string(fault) != "empty") {
     // Deliberately sparse and reversed: ARMuon is not an entry-aligned friend.
     for (Long64_t e = base->GetEntries(); e-- > 0;) {
@@ -51,19 +37,39 @@ void add_muon(const char* path, const char* fault = "") {
       arm->Fill();
     }
   }
-  if (std::string(fault) == "count") scaled->SetEntries(scaled->GetEntries() - 1);
-  simple->Write(); scaled->Write(); arm->Write();
+  arm->Write();
   file.Close();
+}
+
+void add_unused_ad_trees(const char* path) {
+  TFile file(path, "UPDATE");
+  auto* base = file.Get<TTree>("Event/Rec/AdSimpleNL");
+  Float_t energy = 0, x = 0;
+  base->SetBranchAddress("energy", &energy);
+  base->SetBranchAddress("x", &x);
+  base->GetEntry(0);
+  file.cd("Event/Rec");
+  for (const char* name : {"AdSimple", "AdScaled", "AdScaledNL"}) {
+    auto* tree = base->CloneTree(0);
+    tree->SetName(name);
+    energy = 12345.f;
+    x = -9876.f;
+    tree->Fill();
+    tree->Write();
+  }
 }
 
 void compare_muon(const char* result, const char* first, const char* second) {
   TFile output(result);
-  const std::vector<const char*> names = {"AdSimple", "AdScaled", "ARMuon"};
+  for (const char* name : {"AdSimple", "AdScaled", "AdScaledNL"})
+    assert(!output.Get((std::string("Event/Rec/") + name).c_str()));
+  const std::vector<const char*> names = {
+      "Event/Rec/AdSimpleNL", "Event/Data/CalibStats", "Event/Rec/ARMuon"};
   const std::vector<const char*> paths = {first, second};
   for (auto* name : names) {
-    auto* out = output.Get<TTree>((std::string("Event/Rec/") + name).c_str());
+    auto* out = output.Get<TTree>(name);
     assert(out);
-    const bool arm = std::string(name) == "ARMuon";
+    const bool arm = std::string(name) == "Event/Rec/ARMuon";
     if (arm) assert(out->GetListOfBranches()->GetEntries() == 25);
     for (auto* object : *out->GetListOfLeaves()) {
       const std::string field = object->GetName();
@@ -74,12 +80,15 @@ void compare_muon(const char* result, const char* first, const char* second) {
     Long64_t offset = 0;
     for (std::size_t s = 0; s < paths.size(); ++s) {
       TFile input(paths[s]);
-      auto* in = input.Get<TTree>((std::string("Event/Rec/") + name).c_str());
+      auto* in = input.Get<TTree>(name);
       for (Long64_t e = 0; e < in->GetEntries(); ++e) {
         assert(in->GetEntry(e) > 0 && out->GetEntry(offset + e) > 0);
-        assert(out->GetLeaf("runNumber")->GetValueLong64() == 7777);
-        assert(out->GetLeaf("sourceIndex")->GetValueLong64() == static_cast<Long64_t>(s));
-        assert(out->GetLeaf("sourceEntry")->GetValueLong64() == e);
+        if (std::string(name) != "Event/Data/CalibStats")
+          assert(out->GetLeaf("runNumber")->GetValueLong64() == 7777);
+        if (arm) {
+          assert(out->GetLeaf("sourceIndex")->GetValueLong64() == static_cast<Long64_t>(s));
+          assert(out->GetLeaf("sourceEntry")->GetValueLong64() == e);
+        }
         for (auto* object : *out->GetListOfLeaves()) {
           auto* leaf = static_cast<TLeaf*>(object);
           const std::string field = leaf->GetName();
@@ -100,13 +109,13 @@ void compare_muon(const char* result, const char* first, const char* second) {
 void corrupt_muon_provenance(const char* path) {
   TFile file(path, "UPDATE");
   auto* sources = file.Get<TTree>("Preservation/Sources");
-  Long64_t counts[3]{};
-  sources->SetBranchAddress("muonEntries", counts);
+  Long64_t count = 0;
+  sources->SetBranchAddress("muonEntries", &count);
   file.cd("Preservation");
   auto* altered = sources->CloneTree(0);
   for (Long64_t e = 0; e < sources->GetEntries(); ++e) {
     sources->GetEntry(e);
-    counts[2] += 1;
+    count += 1;
     altered->Fill();
   }
   altered->Write("Sources", TObject::kOverwrite);
