@@ -37,7 +37,7 @@ class StartupRecoveryTests(unittest.TestCase):
         self.saved = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in self.good}
         self.write_failure('000001')
 
-    def write_failure(self, chunk, reason='No such file or directory'):
+    def write_failure(self, chunk, reason='Input/output error'):
         (self.run / 'status' / (chunk + '.fail')).write_text(
             'rc=1\nhost=test.ihep.ac.cn\njob=42.{}\nfinished=2026-10-13T00:01:00Z\n'.format(int(chunk)))
         (self.run / 'logs' / (chunk + '.out')).write_text('')
@@ -49,7 +49,7 @@ class StartupRecoveryTests(unittest.TestCase):
 
     def test_exact_startup_proof_rejects_mixed_input_and_unknown_errors(self):
         for reason, eligible in [('No such file or directory', True), ('Transport endpoint is not connected', True),
-                                 ('Input/output error', False), ('Permission denied', False)]:
+                                 ('Input/output error', True), ('Permission denied', False)]:
             self.write_failure('000001', reason)
             self.assertEqual(preserve.lcg_startup_errors(self.run, self.stage)['startup'], eligible)
         self.write_failure('000001')
@@ -64,7 +64,9 @@ class StartupRecoveryTests(unittest.TestCase):
         (self.run / 'status/000000.fail').write_text('rc=135\n')
         self.assertFalse(preserve.lcg_startup_errors(self.run, self.stage)['startup'])
         (self.run / 'status/000000.fail').unlink()
-        for error in ('ERROR missing required tree: /mini/existing.root\n', 'ERROR checksum mismatch\n'):
+        for error in ('ERROR missing required tree: /mini/existing.root\n', 'ERROR checksum mismatch\n',
+                      'ERROR cannot read mini input: Input/output error\n',
+                      '{}: line 70: /mini/existing.root: Input/output error\n'.format(self.code / 'scripts/worker.sh')):
             (self.run / 'logs/000001.err').write_text(error)
             self.assertFalse(preserve.lcg_startup_errors(self.run, self.stage)['startup'])
         self.write_failure('000001')
