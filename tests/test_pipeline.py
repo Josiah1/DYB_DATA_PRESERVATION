@@ -556,6 +556,113 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(verified, {'/stage/' + r['stem'] for r in records})
             self.assertFalse(preserve.load_json(root / 'provenance/controller.json')['overdue_runs'])
 
+    def test_startup_failure_waits_for_writers_while_other_work_transfers_and_admits(self):
+        records = preserve.inventory_records()[:3]
+        for exhausted in (False, True):
+            with self.subTest(exhausted=exhausted), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / 'provenance').mkdir()
+                local = root / 'data'; local.mkdir()
+                args = preserve.build_parser().parse_args([
+                    'run', '--local-root', str(local), '--mount-root', str(root),
+                    '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                    '--max-jobs', '2', '--max-staged-gib', '3', '--files-per-job', '2000',
+                    '--skip-missing-minis', '--skip-broken-minis', '--delete-remote-after-sync'])
+                args.poll_seconds = 0.001
+                stages, jobs, verified, submitted, retried, cleaned = {}, [], set(), [], [], []
+
+                def stage(record, state='PENDING'):
+                    marker = dict(record, run_dir='/stage/' + record['stem'], code_root='/code', chunk_count=1,
+                                  files_per_job=2000, selection=preserve.selection_record('off'),
+                                  input_source='mini', skip_missing_minis=True)
+                    stages[marker['run_dir']] = dict(marker=marker, submissions=[], intent=False,
+                        status=dict(state=state, running=0, failed=int(state == 'FAILED')))
+                    return marker
+
+                startup = stage(records[0], 'FAILED')
+                ready = stage(records[1], 'COMPLETE')
+                failed = stages[startup['run_dir']]
+                failed['submissions'] = [dict(cluster_id=42, submitted_at=preserve.utc_now())]
+                failed['status']['failure_updates'] = {'000000': [1, 1]}
+                failed['startup_failure'] = dict(startup=True, failure_updates={'000000': [1, 1]})
+                retained = copy.deepcopy(failed)
+                jobs.append(dict(Iwd=startup['run_dir'], JobStatus=2, RequestCpus=1, ClusterId=42, ProcId=0))
+
+                def remote(alias, code, arguments):
+                    command = arguments[0]
+                    options = dict(zip(arguments[1::2], arguments[2::2]))
+                    directory = options.get('--run-dir')
+                    if command == '_pool':
+                        if ready['run_dir'] in verified and submitted:
+                            jobs.clear()
+                            for run in stages.values():
+                                if run is not failed: run['status']['state'] = 'COMPLETE'
+                            if exhausted and len(failed['submissions']) == 1:
+                                failed['submissions'].append(dict(cluster_id=43, submitted_at=preserve.utc_now()))
+                        return copy.deepcopy(dict(runs=list(stages.values()), jobs=jobs, queue=preserve.queue_counts(jobs),
+                            reserved_bytes=len(stages)*preserve.GIB, output_bytes=0,
+                            quota=dict(free_bytes=500*preserve.GIB, used_files=1, limit_files=200000))), 0
+                    if command == '_prepare':
+                        self.assertTrue(any(j['Iwd'] == startup['run_dir'] for j in jobs))
+                        self.assertEqual(failed, retained)
+                        return stage(records[2]), 0
+                    if command == '_submit':
+                        if directory == startup['run_dir']:
+                            self.assertFalse(exhausted, 'never submit a third attempt')
+                            self.assertFalse(jobs, 'retry requires a fresh successful no-writer query')
+                            self.assertIn(ready['run_dir'], verified)
+                            self.assertIn('--resubmit', arguments); self.assertIn('--startup-retry', arguments)
+                            self.assertEqual(arguments[arguments.index('--max-attempts')+1], '2')
+                            retried.append(directory)
+                            failed['status'].update(state='COMPLETE', failed=0)
+                            failed['startup_failure'] = None
+                            failed['startup_recovery'] = [dict(kind='dyb-worker-startup-recovery',
+                                run_dir=directory, catalog_sha256=startup['catalog_sha256'])]
+                        else:
+                            self.assertNotIn('--startup-retry', arguments)
+                            submitted.append(directory)
+                            jobs.append(dict(Iwd=directory, JobStatus=2, RequestCpus=1, ClusterId=44, ProcId=0))
+                        stages[directory]['submissions'].append(dict(cluster_id=44, submitted_at=preserve.utc_now()))
+                        return dict(cluster_id=44), 0
+                    if command == '_finalize':
+                        self.assertFalse(any(j['Iwd'] == directory for j in jobs))
+                        return stages[directory]['marker'], 0
+                    self.assertEqual(command, '_cleanup', 'startup failures must never reach missing/broken classification')
+                    self.assertIn(directory, verified, 'verification must precede staging deletion')
+                    cleaned.append(directory); del stages[directory]
+                    return dict(deleted=directory), 0
+
+                def sync(alias, marker, *unused):
+                    if marker['run_dir'] == ready['run_dir']:
+                        self.assertTrue(any(j['Iwd'] == startup['run_dir'] for j in jobs))
+                        self.assertEqual(failed, retained)
+                        report = preserve.load_json(root/'provenance/controller.json')
+                        self.assertEqual(report['startup_recovery_pending'][0]['state'], 'waiting_for_writers')
+                        self.assertTrue(report['new_run_admission']); self.assertIsNone(report['error'])
+                    verified.add(marker['run_dir'])
+                    return dict(files=1, bytes=1, directory=marker['run_dir'])
+
+                with mock.patch('preserve.remote_json', side_effect=remote), \
+                        mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                        mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                        mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync):
+                    if exhausted:
+                        with self.assertRaisesRegex(RuntimeError, 'exhausted submission attempts'):
+                            preserve.run_pipeline(args, records, {}, local)
+                    else: preserve.run_pipeline(args, records, {}, local)
+                self.assertEqual(len(submitted), 1)
+                self.assertEqual(len(retried), 0 if exhausted else 1)
+                self.assertIn(ready['run_dir'], verified)
+                report = preserve.load_json(root/'provenance/controller.json')
+                if exhausted:
+                    self.assertEqual(report['startup_recovery_pending'][0]['state'], 'exhausted')
+                    self.assertEqual(failed['status']['failed'], 1)
+                else:
+                    self.assertFalse(report['startup_recovery_pending'])
+                    self.assertEqual(len(cleaned), 3)
+                    exported = root/'provenance/worker-startup-recovery' / ("P17B/EH1/"+startup['stem']+".json")
+                    self.assertEqual(preserve.load_json(exported), failed['startup_recovery'])
+
     def test_pipeline_adopts_inflight_refills_during_transfer_and_only_cleans_verified(self):
         records = preserve.inventory_records()[:5]
         with tempfile.TemporaryDirectory() as temporary:

@@ -11,6 +11,22 @@ from scripts.check_campaign import status_record
 
 
 class CampaignMonitorTests(unittest.TestCase):
+    def test_startup_recovery_warning_clears_and_never_hides_fatal_errors(self):
+        progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=20, skipped_inputs=2)
+        service = dict(ActiveState='active', InvocationID='one')
+        controller = dict(heartbeat_time=100, max_jobs=300, max_staged_bytes=400, reserved_bytes=100,
+                          queue=dict(held=0, outstanding=1), error=None,
+                          startup_recovery_pending=[dict(run='P17B/EH1/run71820', state='waiting_for_writers')])
+        report = status_record(progress, service, {}, 100, controller)
+        self.assertIsNone(report['alert'])
+        self.assertIn('Known LCG startup', report['warning']); self.assertIn('waiting_for_writers', report['warning'])
+        self.assertEqual((report['pending_inputs'], report['skipped_inputs']), (20, 2))
+        for error in ('unknown worker failure', 'source I/O error', 'checksum mismatch', 'quota failure'):
+            controller['error'] = error
+            self.assertIn(error, status_record(progress, service, {}, 100, controller)['alert'])
+        controller.update(error=None, startup_recovery_pending=[])
+        self.assertIsNone(status_record(progress, service, {}, 100, controller)['warning'])
+
     def test_scheduler_unavailability_warns_with_unknown_counts_and_clears_after_recovery(self):
         progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=20, skipped_inputs=2)
         service = dict(ActiveState='active', InvocationID='one')

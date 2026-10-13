@@ -39,6 +39,8 @@ DEFAULT_ALIAS = "dayabay1"
 DEFAULT_CODE_ROOT = "/dybfs2/users/lijj16/DYB_DATA_PRESERVATION/code"
 DEFAULT_STAGE_ROOT = "/dybfs2/users/lijj16/DYB_DATA_PRESERVATION/staging"
 DEFAULT_LCG_VIEW = "/cvmfs/sft.cern.ch/lcg/views/LCG_110/x86_64-el9-gcc13-opt"
+# The startup proof is tied to this worker's source-before-converter ordering.
+LCG_STARTUP_WORKER_SHA256 = "1800190b34ce101681b9dd72eb6bd2feaa449acc369b06e1fe7bb4efbda6e3ea"
 GIB = 1024 ** 3
 # Conservative admission reservation, not an output-size prediction or truncation limit.
 CHUNK_RESERVE_BYTES = GIB
@@ -735,6 +737,9 @@ def pool_status(stage_root):
                          submissions=load_json(submissions) if submissions.exists() else [],
                          intent=(directory / "submission-intent.json").exists(),
                          broken_recovery_pending=(directory / "broken-recovery.json").exists(),
+                         startup_failure=lcg_startup_errors(directory, stage_root) if status.get("failed") else None,
+                         startup_recovery=load_json(directory / "startup-recovery.json")
+                         if (directory / "startup-recovery.json").exists() else None,
                          output_bytes=output_bytes,
                          reserved_bytes=reserve))
     return dict(checked_at=utc_now(), jobs=jobs, queue=queue_counts(jobs), runs=runs,
@@ -758,20 +763,27 @@ def admission_reason(pool, chunks, max_jobs, stage_bytes, local_free):
     return None
 
 
-def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False, max_jobs=300):
+def submit_run(run_dir, stage_root, group, walltime, memory_mb, resubmit=False, max_jobs=300,
+               startup_retry=False, max_attempts=2):
     run_dir, marker = load_run(run_dir, stage_root)
     # Remote lock also protects against two simultaneous submission helpers after an SSH interruption.
     with (Path(stage_root) / ".submission.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs)
+        return submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs,
+                             startup_retry, max_attempts)
 
 
-def submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs):
+def submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resubmit, max_jobs,
+                  startup_retry=False, max_attempts=2):
     submissions_path = run_dir / "submissions.json"
     submissions = load_json(submissions_path) if submissions_path.exists() else []
     intent_path = run_dir / "submission-intent.json"
     jobs = scheduler_jobs(stage_root)
     own = [j for j in jobs if j["Cmd"] == str(run_dir / "array-job.sh")]
+    if startup_retry and (not resubmit or intent_path.exists() or
+                          any(j["Iwd"] == str(run_dir) for j in jobs) or
+                          run_status(run_dir, stage_root)["running"]):
+        raise RuntimeError("startup retry has possible writers or an unresolved intent; retain it")
     if intent_path.exists():
         intent = load_json(intent_path)
         clusters = {j["ClusterId"] for j in own}
@@ -789,6 +801,36 @@ def submit_locked(run_dir, marker, stage_root, group, walltime, memory_mb, resub
         raise RuntimeError("refusing duplicate submission while this run has queued jobs")
     if not 1 <= max_jobs <= 300 or len(jobs) + marker["chunk_count"] > max_jobs:
         raise RuntimeError("submission would exceed the campaign job cap")
+    if startup_retry:
+        if not submissions or len(submissions) - marker.get("broken_recovery_submissions", 0) >= min(2, max_attempts):
+            raise RuntimeError("run exhausted startup submission attempts; retain it")
+        proof = lcg_startup_errors(run_dir, stage_root)
+        if proof.get("recheck") or not proof.get("startup"):
+            raise RuntimeError("startup failures no longer have a stable exclusive proof; retain it")
+        good = {}
+        for ok in sorted((run_dir / "status").glob("*.ok")):
+            chunk = ok.stem
+            files = [ok, run_dir / "status" / (chunk + ".report"), run_dir / "chunks" / (chunk + ".list")]
+            if files[-1].read_text().strip():
+                files.append(run_dir / "reports" / ("{}.slim.{}.sources.tsv".format(output_prefix(marker), chunk)))
+                output = run_dir / "outputs" / ("{}.slim.{}.root".format(output_prefix(marker), chunk))
+                good[str(output.relative_to(run_dir))] = dict(bytes=output.stat().st_size, mtime_ns=output.stat().st_mtime_ns)
+            for path in files:
+                good[str(path.relative_to(run_dir))] = dict(bytes=path.stat().st_size, sha256=sha256_file(path))
+        journal = run_dir / "startup-recovery.json"
+        evidence = dict(kind="dyb-worker-startup-recovery", run_dir=str(run_dir),
+                        catalog_sha256=marker["catalog_sha256"], selection=marker["selection"],
+                        input_count=marker["input_count"], processed_input_count=marker.get("processed_input_count", marker["input_count"]),
+                        skipped_inputs=marker.get("skipped_inputs", []), previous_submissions=submissions,
+                        attempt=len(submissions) + 1, max_attempts=min(2, max_attempts), proof=proof, good_files=good)
+        history = load_json(journal) if journal.exists() else []
+        if any(item["catalog_sha256"] != marker["catalog_sha256"] or item["run_dir"] != str(run_dir) for item in history):
+            raise ValueError("startup recovery journal identity differs from the staged run")
+        same_attempt = [item for item in history if item["attempt"] == evidence["attempt"]]
+        if same_attempt and same_attempt != [evidence]:
+            raise RuntimeError("startup recovery evidence differs; retain the original journal")
+        if not same_attempt:
+            atomic_json(journal, history + [evidence])  # Preserve evidence before markers/logs are overwritten.
     if resubmit:
         for path in (run_dir / "status").glob("*.fail"):
             path.unlink()
@@ -851,6 +893,62 @@ def run_status(run_dir, stage_root):
                         if (run_dir / "logs" / (path.stem + ".err")).is_file() else None]
             for path in failed}
     return result
+
+
+def lcg_startup_errors(run_dir, stage_root):
+    """Prove only the two observed setup-source failures, never converter/input faults or mixed failures."""
+    run_dir, marker = load_run(run_dir, stage_root)
+    before = run_status(run_dir, stage_root)
+    signature = before.get("failure_updates")
+    failures = []
+    worker = Path(marker["code_root"]) / "scripts/worker.sh"
+    prefix = "{}: line 54: {}/setup.sh: ".format(worker, DEFAULT_LCG_VIEW)
+    for chunk in sorted(signature or {}):
+        paths = [run_dir / "logs" / (chunk + ".err"), run_dir / "logs" / (chunk + ".out"),
+                 run_dir / "status" / (chunk + ".fail")]
+        if any(path.stat().st_size > 4096 for path in paths):
+            break
+        error, output, failure = [path.read_text() for path in paths]
+        if error not in (prefix + "No such file or directory\n", prefix + "Transport endpoint is not connected\n"):
+            break
+        status = re.fullmatch(r"rc=1\nhost=([^\s]+)\njob=(\d+)\.(\d+)\nfinished=([^\s]+)\n", failure)
+        report = run_dir / "status" / (chunk + ".report")
+        if not status or output or (report.exists() and report.stat().st_size):
+            break
+        host, cluster, proc, finished = status.groups()
+        receipts = load_json(run_dir / "submissions.json")
+        if (not receipts or int(cluster) != receipts[-1]["cluster_id"] or int(proc) != int(chunk) or
+                not 0 <= int(chunk) < marker["chunk_count"]):
+            raise ValueError("startup failure does not match its current submission/chunk")
+        if dt.datetime.fromisoformat(finished.replace("Z", "+00:00")).tzinfo is None:
+            raise ValueError("startup failure timestamp has no timezone")
+        failures.append(dict(chunk=chunk, failure=failure, stderr=error, stdout=output,
+                             stderr_sha256=sha256_file(paths[0]), failure_sha256=sha256_file(paths[2])))
+    after = run_status(run_dir, stage_root)
+    if after.get("failure_updates") != signature:
+        return dict(recheck=True, failure_updates=after.get("failure_updates"))
+    if not failures or len(failures) != before["failed"]:
+        return dict(startup=False, failure_updates=signature)
+    if input_source_mode(marker) != "mini" or sha256_file(worker) != LCG_STARTUP_WORKER_SHA256:
+        raise ValueError("startup proof requires the known mini worker")
+    catalog = run_dir / "catalog.list"
+    if sha256_file(catalog) != marker["catalog_sha256"]:
+        raise ValueError("startup proof catalog checksum mismatch")
+    originals = parse_catalog_inputs(catalog.read_bytes(), str(catalog))
+    minis = resolve_inputs(originals, "mini")
+    chunks = recorded_chunks(originals, marker)
+    for failure in failures:
+        chunk = failure["chunk"]
+        inputs = run_dir / "chunks" / (chunk + ".list")
+        if inputs.read_text().splitlines() != chunks[int(chunk)] or not chunks[int(chunk)]:
+            raise ValueError("startup failure chunk differs from fixed mini catalog")
+        failure.update(chunk_sha256=sha256_file(inputs), sources=[
+            dict(path=path, catalog_index=minis.index(path), catalog_entry=originals[minis.index(path)])
+            for path in chunks[int(chunk)]])
+    after = run_status(run_dir, stage_root)
+    if after.get("failure_updates") != signature:
+        return dict(recheck=True, failure_updates=after.get("failure_updates"))
+    return dict(startup=True, failure_updates=signature, failures=failures, worker_sha256=LCG_STARTUP_WORKER_SHA256)
 
 
 def confirmed_empty_mini_errors(run_dir, stage_root):
@@ -2056,6 +2154,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                         continue  # Refresh staging/queue after cleanup before another admission or retry.
                     active = {}
                     rechecking = set()
+                    startup_pending = {}
                     for run in pool["runs"]:
                         marker = run["marker"]
                         key = relative(marker)
@@ -2078,6 +2177,34 @@ def run_pipeline(args, selected, snapshot, local_root):
                         if key not in done or args.delete_remote_after_sync:
                             active[key] = run
                         own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
+                        if run.get("startup_recovery"):
+                            journal = run["startup_recovery"]
+                            if not isinstance(journal, list) or any(
+                                    item["kind"] != "dyb-worker-startup-recovery" or
+                                    item["run_dir"] != marker["run_dir"] or
+                                    item["catalog_sha256"] != marker["catalog_sha256"] for item in journal):
+                                raise ValueError("startup recovery journal differs from fixed campaign: " + key)
+                            path = local_root.parent / "provenance/worker-startup-recovery" / (key + ".json")
+                            if not path.exists() or load_json(path) != journal:
+                                validate_local_mount(local_root, args.mount_root, args.mount_uuid)
+                                path.parent.mkdir(parents=True, exist_ok=True)
+                                atomic_json(path, journal)
+                        startup = run.get("startup_failure") or {}
+                        if startup.get("recheck") or (startup and
+                                startup.get("failure_updates") != run["status"].get("failure_updates")):
+                            content_rechecks[key] = content_rechecks.get(key, 0) + 1
+                            if content_rechecks[key] > 8:
+                                raise RuntimeError("worker failure snapshot did not settle after 8 rechecks; run retained: " + key)
+                            rechecking.add(key)
+                            continue
+                        if startup.get("startup") and key not in explicit_holds:
+                            content_rechecks.pop(key, None)
+                            attempts = len(run["submissions"]) - marker.get("broken_recovery_submissions", 0)
+                            startup_pending[key] = dict(run=key, failed_chunks=sorted(startup["failure_updates"]),
+                                attempts=attempts, max_attempts=min(2, args.max_attempts),
+                                state="waiting_for_writers" if own or run["status"]["running"] else
+                                      "exhausted" if attempts >= min(2, args.max_attempts) else "ready_for_retry")
+                            continue  # Never send an environment failure through missing/broken-input classification.
                         if (args.skip_broken_minis and key not in explicit_holds and
                                 (run["status"]["failed"] or run.get("broken_recovery_pending")) and
                                 not own and not run["status"]["running"]):
@@ -2146,6 +2273,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                                   skip_broken_minis=args.skip_broken_minis,
                                   overdue_runs=overdue,
                                   pending_content_checks=sorted(rechecking),
+                                  startup_recovery_pending=list(startup_pending.values()),
                                   held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
                                                   status=active[key]["status"],
                                                   reason="operator hold for existing mini content errors; inputs remain pending")
@@ -2166,6 +2294,11 @@ def run_pipeline(args, selected, snapshot, local_root):
                             if status["state"] == "COMPLETE":
                                 raise RuntimeError("held run is now complete; inspect before releasing hold: " + key)
                             continue
+                        if key in startup_pending:
+                            if run["intent"]:
+                                raise RuntimeError("startup failure has an unresolved submission intent; retain it: " + key)
+                            if own or status["running"]:
+                                continue
                         if status["state"] == "COMPLETE" and not own and not status["running"]:
                             if transfer is None:
                                 transferring = marker
@@ -2180,7 +2313,8 @@ def run_pipeline(args, selected, snapshot, local_root):
                         # Scheduler kills before worker startup can leave no .fail or .running file.
                         retry = not own and (status["state"] == "FAILED" or expired or
                                              marker.get("broken_recovery_submissions") == len(run["submissions"]))
-                        if retry and len(run["submissions"]) - marker.get("broken_recovery_submissions", 0) >= args.max_attempts:
+                        attempt_limit = min(2, args.max_attempts) if key in startup_pending else args.max_attempts
+                        if retry and len(run["submissions"]) - marker.get("broken_recovery_submissions", 0) >= attempt_limit:
                             raise RuntimeError("run exhausted submission attempts: " + key)
                         if run["intent"] or not run["submissions"] or retry:
                             if pool["queue"]["outstanding"] + marker["chunk_count"] > args.max_jobs:
@@ -2194,6 +2328,8 @@ def run_pipeline(args, selected, snapshot, local_root):
                                      "--memory-mb", str(args.memory_mb), "--max-jobs", str(args.max_jobs)]
                             if retry:
                                 extra.append("--resubmit")
+                                if key in startup_pending:
+                                    extra += ["--startup-retry", "--max-attempts", str(attempt_limit)]
                                 if expired:
                                     print("retrying expired incomplete run {}; no scheduler jobs remain; "
                                           "verified chunks retained".format(key), flush=True)
@@ -2205,7 +2341,8 @@ def run_pipeline(args, selected, snapshot, local_root):
                         continue
                     if active.keys() == held and not rechecking and (not pending or args.drain_staging):
                         raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
-                    if any(r["status"]["failed"] for key, r in active.items() if key not in held and key not in rechecking):
+                    if any(r["status"]["failed"] for key, r in active.items()
+                           if key not in held and key not in rechecking and key not in startup_pending):
                         raise RuntimeError("failed chunks; other in-flight jobs retained for safe recovery")
                     if report["backpressure"] and not pool["jobs"] and transfer is None:
                         raise RuntimeError("cannot submit prepared runs: " + report["backpressure"])
@@ -2369,9 +2506,11 @@ def build_parser():
     submit.add_argument("--memory-mb", type=int, required=True)
     submit.add_argument("--resubmit", action="store_true")
     submit.add_argument("--max-jobs", type=int, default=300)
+    submit.add_argument("--startup-retry", action="store_true")
+    submit.add_argument("--max-attempts", type=int, default=2)
     submit.set_defaults(function=lambda args: print(json.dumps(submit_run(
         args.run_dir, args.stage_root, args.group, args.walltime, args.memory_mb,
-        args.resubmit, args.max_jobs))) or 0)
+        args.resubmit, args.max_jobs, args.startup_retry, args.max_attempts))) or 0)
 
     pool = commands.add_parser("_pool")
     pool.add_argument("--stage-root", required=True)

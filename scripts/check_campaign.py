@@ -50,6 +50,10 @@ def status_record(progress, service, previous, now, controller=None):
     if overdue:
         warning = (warning + "; " if warning else "") + "Overdue compression jobs retained for inspection: " + ", ".join(
             r["run"] for r in overdue)
+    startup = (controller or {}).get("startup_recovery_pending", [])
+    if startup:
+        warning = (warning + "; " if warning else "") + "Known LCG startup faults; bounded recovery pending: " + ", ".join(
+            "{} ({})".format(r["run"], r["state"]) for r in startup)
     return dict(progress, service=service, checked_at=preserve.utc_now(), warning=warning,
                 last_progress_time=last_progress, alert=alert, controller=controller, metadata_summary_only=True)
 

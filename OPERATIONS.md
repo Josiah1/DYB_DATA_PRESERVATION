@@ -645,3 +645,54 @@ unwound, advancing the portable archive from 850 to 851 runs. These are dated
 recovery observations. Evidence is in portable
 `provenance/worker-recovery-run71188.json`; the compact current recovery result
 is ignored `build/oct13-worker-recovery-result.json`.
+
+## 2026-10-13 run71820 and bounded LCG startup recovery
+
+Run71820 had two different failures in cluster 82195805: chunk 9 could not
+source the CVMFS LCG setup on lhws199, while chunk 8 entered the converter and
+received SIGBUS on dws133. That mixed failure is deliberately ineligible for
+automatic startup recovery. The SIGBUS cause remains unconfirmed. A fresh
+global query found no jobs, worker markers or unresolved intents; read-only
+headers of the 32 affected minis and staging quota checks showed no contrary
+input/storage evidence. Original logs, failure markers, receipts, exact
+catalog/source identities and 70 good-file fingerprints were preserved before
+the explicitly authorized diagnostic second attempt, cluster 82198463.
+Both retried chunks passed ROOT verification on lhws283 at 13:53 UTC. All 14
+previously good chunks retained their 70 recorded hashes/sizes/mtimes. The run
+remains 247 expected inputs, 246 processed and one earlier missing mini, with
+no new missing/broken classifications. Portable evidence is
+`provenance/worker-recovery-run71820.json`.
+
+The pool now identifies only exclusive, exact `worker.sh` line-54 setup-source
+failures: the default LCG view reports `No such file or directory` or
+`Transport endpoint is not connected`. Proof requires the pinned worker
+SHA256, rc=1, an exact current receipt/chunk identity and timezone-bearing
+timestamp, empty stdout and no nonempty converter report, and unchanged
+failure snapshots. Catalog hashes and fixed mini chunk membership must match.
+SIGBUS, mixed failures, other messages, source errors, permissions, I/O,
+checksums, mounts and quota faults retain their existing fatal handling.
+Changing snapshots defer for at most eight polls; they never authorize a retry.
+
+Known startup-only failures wait visibly in `startup_recovery_pending` while
+live writers finish, allowing unrelated verified transfers and admissions.
+The existing submission lock and a fresh successful global query must prove
+no old writers, running markers or unresolved intent before the retry helper
+independently repeats the strict proof. Before removing failure markers or
+overwriting logs, it saves `startup-recovery.json` with original failure proof,
+source/catalog identities, receipts, existing gaps and good-file fingerprints.
+The controller exports that journal to portable
+`provenance/worker-startup-recovery/<period>/<hall>/<run>.json`; it also travels
+with the run. Retry exhaustion remains visible and fatal; this path cannot
+extend the existing two-attempt allowance or replay an uncertain submission.
+The five-minute checker warns while startup recovery is pending and clears
+that warning after recovery. Scheduler-query pause/retry fix 6962387 remains
+unchanged. No worker, converter, schema, source or physics policy changed.
+
+Validation: 53 focused/existing startup, pipeline, preservation, broken-mini,
+content, worker/converter and monitor tests ran: 49 passed and four skipped
+for their unavailable supported ROOT/LCG runtimes on Ubuntu. Tests cover mixed
+and unknown rejection, evidence-before-overwrite, good-chunk preservation,
+writer/intent/query guards, safe second attempt and exhaustion, verified
+unrelated transfers/admissions during deferral, portable journal export and
+monitor warning clearance. The compact runtime/deployment checkpoint is
+ignored `build/oct13-startup-recovery-result.json`.
