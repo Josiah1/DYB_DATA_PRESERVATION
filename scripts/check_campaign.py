@@ -28,16 +28,23 @@ def status_record(progress, service, previous, now, controller=None):
             alert = "Controller error: " + controller["error"]
         elif now - controller.get("heartbeat_time", 0) > 300:
             alert = "Controller/scheduler heartbeat is more than five minutes old"
-        elif controller.get("queue", {}).get("held"):
+        elif (controller.get("scheduler_status") != "unavailable" and
+              any(key in controller and controller[key] is None for key in ("queue", "reserved_bytes"))):
+            alert = "Unknown scheduler state without an active automatic retry"
+        elif (controller.get("queue") or {}).get("held"):
             alert = "Compression jobs are held by the scheduler"
-        elif controller.get("queue", {}).get("outstanding", 0) > controller["max_jobs"]:
+        elif (controller.get("queue") or {}).get("outstanding", 0) > controller["max_jobs"]:
             alert = "Compression job cap exceeded"
-        elif controller.get("reserved_bytes", 0) > controller["max_staged_bytes"]:
+        elif (controller.get("reserved_bytes") or 0) > controller["max_staged_bytes"]:
             alert = "Staging reservation budget exceeded; inspect storage"
     held = (controller or {}).get("held_runs", [])
     warning = ("Existing mini content errors remain pending in held runs: " +
                ", ".join(r["run"] for r in held)) if held else None
-    if (controller or {}).get("new_run_admission") is False:
+    unavailable = (controller or {}).get("scheduler_status") == "unavailable"
+    if unavailable:
+        warning = (warning + "; " if warning else "") + (
+            "Scheduler query unavailable; queue unknown; submissions/cleanup paused; automatic retry")
+    elif (controller or {}).get("new_run_admission") is False:
         warning = (warning + "; " if warning else "") + "New run admission paused while retained staging drains"
     overdue = (controller or {}).get("overdue_runs", [])
     if overdue:
@@ -93,9 +100,10 @@ def main():
             report["completed_runs"], report["processed_inputs"], report["missing_skipped_inputs"],
             report["broken_skipped_inputs"], report["pending_inputs"])
         if not alert and report.get("controller"):
-            queue = report["controller"].get("queue", {})
-            body += "; jobs running={} idle={} / cap={}".format(
+            queue = report["controller"].get("queue")
+            body += ("; jobs running={} idle={} / cap={}".format(
                 queue.get("running"), queue.get("idle"), report["controller"]["max_jobs"])
+                if queue is not None else "; jobs unknown / cap={}".format(report["controller"]["max_jobs"]))
         if report.get("warning"):
             body += "; " + report["warning"]
         title = "DYB preservation needs attention" if alert else (

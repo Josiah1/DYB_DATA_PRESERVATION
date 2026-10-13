@@ -11,6 +11,29 @@ from scripts.check_campaign import status_record
 
 
 class CampaignMonitorTests(unittest.TestCase):
+    def test_scheduler_unavailability_warns_with_unknown_counts_and_clears_after_recovery(self):
+        progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=20, skipped_inputs=2)
+        service = dict(ActiveState='active', InvocationID='one')
+        controller = dict(heartbeat_time=100, max_jobs=300, max_staged_bytes=400,
+                          queue=None, quota=None, reserved_bytes=None, scheduler_status='unavailable',
+                          scheduler_error='SECMAN:2007 read failure', scheduler_retry_seconds=60,
+                          new_run_admission=False, error=None)
+        report = status_record(progress, service, {}, 100, controller)
+        self.assertIsNone(report['alert'])
+        self.assertIn('queue unknown', report['warning'])
+        self.assertIn('automatic retry', report['warning'])
+        self.assertNotIn('staging drains', report['warning'])
+        self.assertIsNone(report['controller']['queue'])
+        self.assertEqual((report['pending_inputs'], report['skipped_inputs'], report['complete']), (20, 2, False))
+        self.assertIn('heartbeat', status_record(progress, service, {}, 401, controller)['alert'])
+        controller['error'] = 'checksum mismatch'
+        self.assertIn('checksum mismatch', status_record(progress, service, {}, 100, controller)['alert'])
+        controller.update(error=None, scheduler_status='available', new_run_admission=True,
+                          queue=dict(held=0, outstanding=0), reserved_bytes=100)
+        self.assertIsNone(status_record(progress, service, {}, 100, controller)['warning'])
+        controller['queue'] = None
+        self.assertIn('Unknown scheduler state', status_record(progress, service, {}, 100, controller)['alert'])
+
     def test_overdue_job_warns_without_skipping_inputs_or_hiding_real_errors(self):
         progress = dict(finished=False, complete=False, artifact_bytes=100,
                         pending_inputs=16, skipped_inputs=0)
