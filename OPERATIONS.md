@@ -616,3 +616,32 @@ by the unchanged 300-job/400-GiB limits. Controller PID 722583 held the single
 controller lock, and the checker/timer were healthy. These are dated recovery
 observations, not live status; current evidence is in portable provenance and
 the small ignored `build/oct12-secman-recovery-result.json` checkpoint.
+
+## 2026-10-13 run71188 worker recovery
+
+The controller stopped on an unrecognized worker failure in run71188. Chunks
+9 and 10 of cluster 82189434 failed at `worker.sh` line 54 while sourcing the
+CVMFS LCG setup: bws0990 reported `Transport endpoint is not connected`, and
+bws0993 reported `No such file or directory` for that same software setup
+script. Neither converter had started reading minis. The strict content-error
+classifier correctly refused to interpret these as missing or broken inputs.
+
+A fresh successful global query found zero jobs, no unresolved intents or
+worker markers, ten good chunks and two failed chunks. Original stderr,
+stdout, failure markers, receipts, exact catalog/source identities and good
+chunk fingerprints were archived before invoking the existing locked retry.
+Cluster 82189500 was attempt two of the existing two-attempt limit; no job was
+cancelled or uncertain intent removed. The ten successful chunks were reused.
+Both new chunks passed ROOT verification on aws003 at 10:16 UTC, producing
+207,824,348 and 207,656,467 bytes. All 50 recorded hashes/sizes/mtimes of the
+ten old chunks remained unchanged. The full catalog still contains 184 inputs:
+182 processed and the same two previously confirmed missing minis, with no
+new gaps from this environment failure. No pipeline/site configuration changed;
+the scheduler retry fix 6962387 remains deployed. Two focused retry/reuse tests
+passed.
+
+The in-flight run63819 finished verified publication while the failed controller
+unwound, advancing the portable archive from 850 to 851 runs. These are dated
+recovery observations. Evidence is in portable
+`provenance/worker-recovery-run71188.json`; the compact current recovery result
+is ignored `build/oct13-worker-recovery-result.json`.
