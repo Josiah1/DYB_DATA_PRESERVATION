@@ -896,7 +896,7 @@ def run_status(run_dir, stage_root):
 
 
 def lcg_startup_errors(run_dir, stage_root):
-    """Prove only the two observed setup-source failures, never converter/input faults or mixed failures."""
+    """Prove only observed setup-source failures, never converter/input faults or mixed failures."""
     run_dir, marker = load_run(run_dir, stage_root)
     before = run_status(run_dir, stage_root)
     signature = before.get("failure_updates")
@@ -909,7 +909,8 @@ def lcg_startup_errors(run_dir, stage_root):
         if any(path.stat().st_size > 4096 for path in paths):
             break
         error, output, failure = [path.read_text() for path in paths]
-        if error not in (prefix + "No such file or directory\n", prefix + "Transport endpoint is not connected\n"):
+        if error not in (prefix + "No such file or directory\n", prefix + "Transport endpoint is not connected\n",
+                         prefix + "Input/output error\n"):
             break
         status = re.fullmatch(r"rc=1\nhost=([^\s]+)\njob=(\d+)\.(\d+)\nfinished=([^\s]+)\n", failure)
         report = run_dir / "status" / (chunk + ".report")

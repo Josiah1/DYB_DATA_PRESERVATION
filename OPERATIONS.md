@@ -664,12 +664,13 @@ no new missing/broken classifications. Portable evidence is
 `provenance/worker-recovery-run71820.json`.
 
 The pool now identifies only exclusive, exact `worker.sh` line-54 setup-source
-failures: the default LCG view reports `No such file or directory` or
-`Transport endpoint is not connected`. Proof requires the pinned worker
+failures: the default LCG view reports `No such file or directory`,
+`Transport endpoint is not connected`, or the separately observed exact setup
+`Input/output error`. Proof requires the pinned worker
 SHA256, rc=1, an exact current receipt/chunk identity and timezone-bearing
 timestamp, empty stdout and no nonempty converter report, and unchanged
 failure snapshots. Catalog hashes and fixed mini chunk membership must match.
-SIGBUS, mixed failures, other messages, source errors, permissions, I/O,
+SIGBUS, mixed failures, other messages, source errors, permissions, other I/O,
 checksums, mounts and quota faults retain their existing fatal handling.
 Changing snapshots defer for at most eight polls; they never authorize a retry.
 
@@ -696,3 +697,16 @@ writer/intent/query guards, safe second attempt and exhaustion, verified
 unrelated transfers/admissions during deferral, portable journal export and
 monitor warning clearance. The compact runtime/deployment checkpoint is
 ignored `build/oct13-startup-recovery-result.json`.
+
+The first reload exposed one additional setup-source message in run71980:
+chunks 5, 17, 23 and 24 of cluster 82199672 on lhws270 reported the exact
+line-54 default-LCG `setup.sh: Input/output error`. No converter report existed;
+stdout was empty, rc was 1, pinned worker/catalog/chunk/receipt identities
+matched, and read-only headers of the 64 affected minis were usable. This is
+an observed software-setup read failure, without any new input gap. The
+whitelist was extended only to that full setup-path signature under identical
+proof, writer/intent and attempt guards; mini/source I/O still cannot qualify.
+Original proof is in portable `provenance/worker-startup-eio-run71980.json`.
+The run remains 419 expected inputs, 416 usable minis and three earlier
+confirmed missing skips. Current retry/disposition belongs to the dated
+checkpoint rather than this static report.
