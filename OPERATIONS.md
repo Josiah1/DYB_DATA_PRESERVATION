@@ -980,3 +980,36 @@ exhaustion and monitor clearance. Python/shell syntax and Git whitespace
 checks passed. Current deployment, retained-writer and runtime evidence is
 the small ignored `build/oct14-22540-recovery-result.json`; original portable
 proof is `provenance/worker-startup-loader-run22540.json`.
+
+## 2026-10-14 21:00 UTC run24134 verification-runtime recovery
+
+The hourly owner found the controller stopped at P17B/EH2/run24134. Chunk 7
+of cluster 82262020 finished conversion and its initial verification, then
+the separate verification process exited 127 on lhws301 because its loader
+could not open `libtbb.so.12`. Its nonempty conversion report and existing
+186,601,609-byte ROOT output correctly exclude it from automatic startup
+recovery. This is not missing/broken-mini evidence; the deeper runtime fault
+remains unconfirmed.
+
+Fresh global queries under the submission lock proved no run writers,
+worker markers or unresolved intent. Catalog/chunk/source-report identities,
+all 16 affected mini headers, quota and the 300-job/400-GiB guards passed.
+The existing output independently verified under the configured LCG runtime:
+12,335,363 retained events from 13,886,913 events in 16 sources. Original
+stderr/stdout/report/failure marker, source list, receipt and 75 fingerprints
+of the fifteen good chunks were preserved before the authorized second
+attempt, cluster 82265639 at 21:04:20 UTC.
+
+Worker lhws306 verified/reused chunk 7 at 21:04:45 UTC. All sixteen chunks
+completed; the recovered output's SHA256, size and mtime and all 75 earlier
+good fingerprints are unchanged. The fixed catalog remains 244 expected
+inputs, 242 processed and two previously confirmed missing minis, with no
+broken inputs or new gaps. The existing controller was restarted after its
+local lock and process checks, preserving the other retained scheduler work.
+
+No pipeline, worker, converter, classifier, physics, schema, source policy or
+site setup changed or was deployed. The original proof and guarded retry
+result are portable `provenance/worker-recovery-run24134-EH2.json`; current
+controller/transfer/checker evidence is the small ignored
+`build/oct14-24134-recovery-result.json`. Hourly and five-minute monitoring
+remain enabled.
