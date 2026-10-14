@@ -841,3 +841,33 @@ the existing guarded retry/restart was used; pipeline/worker/source/selection
 and attempt limits did not change. Portable proof is
 `provenance/worker-recovery-run21543-EH2.json`; the small ignored current
 checkpoint is `build/oct14-21543-recovery-result.json`.
+
+### Third scheduled recovery: EH2/run21952
+
+The 15:00 UTC check detected a converter SIGBUS in chunk 2 of
+P17B/EH2/run21952, cluster 82237417. This crash was on lhws303 at 14:33:46 UTC
+inside ROOT `TStreamerInfoActions::WriteBasicType<float>` while writing ROOT
+metadata. The converter report was empty; its 195,176,303-byte partial output
+and empty partial source report were retained. This is a different node and
+execution phase from the preceding aws006 verification faults. The deeper
+cause remains unconfirmed; no infrastructure failure was reclassified as an
+input omission or admitted by the startup-only classifier.
+
+Successful fresh global queries found zero jobs, 175 staged runs (174 ready)
+and no unresolved intents. The affected 16 mini headers, fixed catalog/chunk
+mapping, selection, worker/source hashes and quota guards passed. The
+configured LCG runtime independently verified a previously good chunk with
+12,212,268 retained entries from 13,844,493 source entries. Original logs,
+failure marker, receipts, exact sources, partial-file metadata and all 15
+fingerprints of the three good chunks were saved before the authorized
+second attempt, cluster 82239558 at 15:02:55 UTC. Its worker on lhws232 began
+at 15:03:17 UTC; good chunks and original partials were unchanged in the
+15:07:38 UTC check. The fixed catalog remains 55 expected minis, 54 processed
+and one earlier confirmed missing mini, with zero new gaps.
+
+The single controller was restarted with the existing code and guards.
+Portable original proof is `provenance/worker-recovery-run21952-EH2.json`;
+current retry outcome, fingerprints, controller, transfer and monitoring
+evidence is the small ignored `build/oct14-21952-recovery-result.json`.
+No source, worker, converter, schema, selection, scheduler configuration or
+attempt-limit change was made.
