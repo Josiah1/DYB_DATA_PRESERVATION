@@ -96,14 +96,11 @@ void compare_muon(const char* result, const char* first, const char* second, boo
       TFile input(paths[s]);
       auto* in = input.Get<TTree>(name);
       auto* ad = input.Get<TTree>("Event/Rec/AdSimpleNL");
-      auto* stats = input.Get<TTree>("Event/Data/CalibStats");
       for (Long64_t e = 0; e < in->GetEntries(); ++e) {
         if (selected) {
           assert(ad->GetEntry(e) > 0);
           const auto detector = ad->GetLeaf("detector")->GetValueLong64();
           if (detector >= 1 && detector <= 4 && !(ad->GetLeaf("energy")->GetValue() > 0.6)) continue;
-          assert(stats->GetEntry(e) > 0);
-          if ((detector == 5 || detector == 6) && stats->GetLeaf("nHit")->GetValueLong64() <= 5) continue;
         }
         assert(in->GetEntry(e) > 0 && out->GetEntry(offset) > 0);
         if (std::string(name) != "Event/Data/CalibStats")
@@ -129,50 +126,35 @@ void compare_muon(const char* result, const char* first, const char* second, boo
   }
 }
 
-void check_pool_boundaries(const char* selected_path, const char* unfiltered_path) {
-  for (const char* path : {selected_path, unfiltered_path}) {
-    const bool selected = path == selected_path;
-    TFile file(path);
+void check_all_pool_hits(const char* selected_path, const char* unfiltered_path) {
+  Long64_t hit_counts[2][2][12] = {};
+  std::vector<Long64_t> non_ad_rows[2];
+  for (int mode = 0; mode < 2; ++mode) {
+    TFile file(mode == 0 ? selected_path : unfiltered_path);
     auto* ad = file.Get<TTree>("Event/Rec/AdSimpleNL");
     auto* stats = file.Get<TTree>("Event/Data/CalibStats");
-    Long64_t pool_five = 0, pool_six = 0, low_hit_ad = 0, low_hit_rpc = 0;
+    auto* arm = file.Get<TTree>("Event/Rec/ARMuon");
+    assert(ad->GetEntries() == stats->GetEntries() && ad->GetEntries() == arm->GetEntries());
     for (Long64_t e = 0; e < ad->GetEntries(); ++e) {
-      assert(ad->GetEntry(e) > 0 && stats->GetEntry(e) > 0);
+      assert(ad->GetEntry(e) > 0 && stats->GetEntry(e) > 0 && arm->GetEntry(e) > 0);
       const auto detector = ad->GetLeaf("detector")->GetValueLong64();
       const auto hits = stats->GetLeaf("nHit")->GetValueLong64();
-      if (detector == 5 || detector == 6) {
-        if (selected) assert(hits > 5);
-        if (hits == 5) ++pool_five;
-        if (hits == 6) ++pool_six;
+      if (detector < 1 || detector > 4) {
+        non_ad_rows[mode].push_back(arm->GetLeaf("sourceIndex")->GetValueLong64());
+        non_ad_rows[mode].push_back(arm->GetLeaf("sourceEntry")->GetValueLong64());
       }
-      if (detector >= 1 && detector <= 4 && hits <= 5) ++low_hit_ad;
-      if (detector == 7 && hits <= 5) ++low_hit_rpc;
+      if (detector == 5 || detector == 6) {
+        assert(hits >= 0 && hits < 12);
+        ++hit_counts[mode][detector - 5][hits];
+      }
     }
-    assert(pool_six > 0 && low_hit_ad > 0 && low_hit_rpc > 0);
-    assert(selected ? pool_five == 0 : pool_five > 0);
   }
-}
-
-void corrupt_pool_hits(const char* path) {
-  TFile file(path, "UPDATE");
-  auto* ad = file.Get<TTree>("Event/Rec/AdSimpleNL");
-  auto* stats = file.Get<TTree>("Event/Data/CalibStats");
-  Int_t hits = 0;
-  stats->SetBranchAddress("nHit", &hits);
-  file.cd("Event/Data");
-  auto* altered = stats->CloneTree(0);
-  bool changed = false;
-  for (Long64_t e = 0; e < stats->GetEntries(); ++e) {
-    assert(ad->GetEntry(e) > 0 && stats->GetEntry(e) > 0);
-    const auto detector = ad->GetLeaf("detector")->GetValueLong64();
-    if (!changed && (detector == 5 || detector == 6)) {
-      hits = 5;
-      changed = true;
+  assert(!non_ad_rows[0].empty() && non_ad_rows[0] == non_ad_rows[1]);
+  for (int pool = 0; pool < 2; ++pool)
+    for (int hits = 0; hits < 12; ++hits) {
+      assert(hit_counts[1][pool][hits] > 0);
+      assert(hit_counts[0][pool][hits] == hit_counts[1][pool][hits]);
     }
-    altered->Fill();
-  }
-  assert(changed);
-  altered->Write("CalibStats", TObject::kOverwrite);
 }
 
 void corrupt_muon_identity(const char* path) {

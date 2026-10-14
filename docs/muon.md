@@ -1,15 +1,15 @@
 # Muon-analysis fields and event matching
 
 Every conversion requires aligned `AdSimpleNL`, `CalibStats`, and
-`ARMuon` trees and stores them together. By default it keeps all entries, so the pool sample
-with `NPmt > 5` and the AD sample with `AdSimpleNL.energy > 20 MeV` remain
-available for analysis cuts.
+`ARMuon` trees and stores them together. By default it keeps all entries.
+All non-AD events are retained in either selection mode, including the
+lowest-hit pool readouts needed for fast-neutron and muon studies.
 
-Use `--ad-selection on` to keep AD events with energy > 0.6 MeV
-and pool events with `NPmt > 5`. Pool detectors are 5 and 6, and `NPmt` is read
-from `CalibStats.nHit`. The converter checks AD/ARMuon row alignment and
-applies one combined mask to all three trees. Other detectors, including RPC,
-are retained.
+Use `--ad-selection on` to keep AD events with energy > 0.6 MeV, including
+all AD events above 20 MeV. Pool detectors are 5 and 6, and `NPmt` is read
+from `CalibStats.nHit`; no pool hit cut is applied. The converter checks
+AD/ARMuon row alignment and applies the same AD selection mask to all three
+trees. Other detectors, including RPC, are retained.
 
 All AD energy, position, and event metadata are read from `AdSimpleNL`.
 The shared branch names in `AdSimple`, `AdScaled`, and `AdScaledNL` are not
@@ -42,7 +42,10 @@ quality values are copied without interpretation. Apply the reconstruction
 version's validity criteria before using a direction or fitted position;
 zero-valued fields alone do not establish a successful reconstruction.
 
-Converter v11 removes the profile option and requires all three trees to
+Converter v12 removes the former pool hit cut and its rejection counters.
+The removal applies even with `--ad-selection on`; pool selection belongs
+in the downstream analysis. Since v11, the converter has no profile option
+and requires all three trees to
 align, with cuts on or off. Remove `--profile` from older commands. The
 `Preservation/profile` metadata is no longer written. Existing files retain
 their original schema and should be verified with the executable that
@@ -87,9 +90,9 @@ ad->AddFriend(stats, "calib");
 ad->Scan("runNumber:detector:triggerTimeSec:triggerTimeNanoSec:energy",
          "detector >= 1 && detector <= 4 && energy > 20");
 
-// Pool readouts satisfying the supplied NPmt requirement.
+// Every retained pool readout, including the lowest-hit events.
 ad->Scan("runNumber:detector:triggerTimeSec:triggerTimeNanoSec:calib.nHit",
-         "(detector == 5 || detector == 6) && calib.nHit > 5");
+         "detector == 5 || detector == 6");
 ```
 
 Detector codes 5 and 6 identify the inner and outer water pools in this input
@@ -104,7 +107,7 @@ In the original reconstruction format, `AdSimpleNL`, `CalibStats`, and
 The converter requires equal row counts and checks the six AD/ARMuon event
 fields below at every input row, whether selection is on or off. A mismatch
 stops conversion without publishing output. With selection on, it applies
-the combined AD-energy and pool-hit mask to all three trees,
+the AD-energy mask to all three trees,
 preserving row correspondence. CalibStats has no event identity fields in
 these minis; its original row pairing with AdSimpleNL is an input requirement.
 
@@ -133,7 +136,6 @@ With selection on, `sourceEntry` retains the original input row number;
 gaps mark removed rows and are expected. `Preservation/Sources.muonEntries`
 records the input count, while `keptEntries` records the retained count in
 each of the three trees.
-`poolAtMost5Hits[2]` counts the original IWS and OWS rows with `nHit <= 5`.
 
 `sourceIndex` starts at zero for each output file. Across several converted
 files, include the output-file identity or resolve it through

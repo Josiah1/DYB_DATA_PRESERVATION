@@ -26,14 +26,13 @@
 namespace {
 constexpr int kCompressionSettings = 509;  // ROOT ZSTD level 9.
 constexpr int kBasketBytes = 256 * 1024;
-constexpr const char* kVersion = "dyb-slim-v11";
+constexpr const char* kVersion = "dyb-slim-v12";
 constexpr int kAdCount = 4;              // AD detector codes 1-4.
 constexpr double kAdMinEnergyMeV = 0.6;
 constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.6].
 constexpr const char* kSelectionOn =
-    "AD entries (detector 1-4) kept when energy > 0.6 MeV; pool entries (detector 5-6) kept "
-    "when CalibStats.nHit > 5; one shared mask applied to all retained event trees; "
-    "other detectors kept; rejected pool counts stored in poolAtMost5Hits; "
+    "AD entries (detector 1-4) kept when energy > 0.6 MeV; all non-AD entries kept "
+    "without an nHit cut; one shared mask applied to all retained event trees; "
     "timestamps cover every source trigger";
 constexpr const char* kSelectionOff =
     "no selection: every entry kept; AD entries (detector 1-4) still counted per source and "
@@ -41,7 +40,6 @@ constexpr const char* kSelectionOff =
     "(adFrom0p3To0p6MeV); timestamps cover every source trigger";
 
 bool is_ad(Short_t detector) { return detector >= 1 && detector <= kAdCount; }
-bool is_pool(Short_t detector) { return detector == 5 || detector == 6; }
 
 // 0 = kept, 1 = at or below 0.3 MeV or NaN, 2 = in (0.3, 0.6] MeV.
 int ad_class(Float_t energy) {
@@ -137,7 +135,6 @@ long long verify_file(const std::string& path) {
   Long64_t first_entry = 0, source_entries = 0, kept_entries = 0, source_bytes = 0;
   Long64_t total_source_entries = 0, total_kept_entries = 0;
   Long64_t ad_below[kAdCount] = {0}, ad_band[kAdCount] = {0};
-  Long64_t pool_below[2] = {0};
   Int_t first_sec = 0, first_nano = 0, last_sec = 0, last_nano = 0;
   Double_t data_seconds = 0, wall_seconds = 0, used_cpu_seconds = 0;
   sources->SetBranchAddress("firstEntry", &first_entry);
@@ -145,13 +142,6 @@ long long verify_file(const std::string& path) {
   sources->SetBranchAddress("keptEntries", &kept_entries);
   sources->SetBranchAddress("adBelow0p3MeV", ad_below);
   sources->SetBranchAddress("adFrom0p3To0p6MeV", ad_band);
-  {
-    auto* leaf = sources->GetLeaf("poolAtMost5Hits");
-    if (!leaf || leaf->GetLeafCount() || leaf->GetLenStatic() != 2 ||
-        std::string(leaf->GetTypeName()) != "Long64_t")
-      throw std::runtime_error("missing or invalid pool rejection counts");
-    bind(sources, "poolAtMost5Hits", pool_below);
-  }
   sources->SetBranchAddress("inputBytes", &source_bytes);
   sources->SetBranchAddress("firstTriggerTimeSec", &first_sec);
   sources->SetBranchAddress("firstTriggerTimeNanoSec", &first_nano);
@@ -174,10 +164,6 @@ long long verify_file(const std::string& path) {
         throw std::runtime_error("negative AD selection count: " + path);
       dropped += ad_below[ad_index] + ad_band[ad_index];
     }
-    for (auto count : pool_below) {
-      if (count < 0) throw std::runtime_error("negative pool selection count: " + path);
-      dropped += count;
-    }
     if (enabled ? kept_entries + dropped != source_entries
                 : kept_entries != source_entries || dropped > source_entries)
       throw std::runtime_error("source selection accounting does not match its entries: " + path);
@@ -193,19 +179,13 @@ long long verify_file(const std::string& path) {
     throw std::runtime_error("kept entry total does not match event trees: " + path);
   Short_t detector = 0;
   Float_t energy = 0;
-  Int_t n_hit = 0;
   ad->SetBranchStatus("*", false);
   bind(ad, "detector", &detector);
   bind(ad, "energy", &energy);
-  calib->SetBranchStatus("*", false);
-  bind(calib, "nHit", &n_hit);
   for (Long64_t entry = 0; enabled && entry < ad->GetEntries(); ++entry) {
     if (ad->GetEntry(entry) <= 0) throw std::runtime_error("cannot read output entry: " + path);
     if (is_ad(detector) && ad_class(energy) != 0)
       throw std::runtime_error("output holds an AD entry at or below the selection threshold: " + path);
-    if (calib->GetEntry(entry) <= 0) throw std::runtime_error("cannot read output calibration entry: " + path);
-    if (is_pool(detector) && n_hit <= 5)
-      throw std::runtime_error("output holds a pool entry with nHit <= 5: " + path);
   }
   verify_muon(file, sources, ad, enabled);
   std::cout << "VERIFY entries=" << ad->GetEntries() << " source_entries=" << total_source_entries
@@ -252,7 +232,6 @@ void convert(const std::string& input_list, const std::string& output_path,
                      "keptEntries";
     for (int ad_index = 1; ad_index <= kAdCount; ++ad_index)
       source_report << "\tad" << ad_index << "Below0p3MeV\tad" << ad_index << "From0p3To0p6MeV";
-    source_report << "\tiwsAtMost5Hits\towsAtMost5Hits";
     source_report << '\n';
     source_report << std::setprecision(std::numeric_limits<double>::max_digits10);
     auto* event_dir = output_file.mkdir("Event");
@@ -302,7 +281,6 @@ void convert(const std::string& input_list, const std::string& output_path,
     std::string source_path;
     Long64_t first_entry = 0, source_entries = 0, kept_entries = 0, source_bytes = 0;
     Long64_t ad_below[kAdCount] = {0}, ad_band[kAdCount] = {0};
-    Long64_t pool_below[2] = {0};
     Int_t first_trigger_sec = 0, first_trigger_nano = 0;
     Int_t last_trigger_sec = 0, last_trigger_nano = 0;
     Double_t data_duration_seconds = 0;
@@ -323,7 +301,6 @@ void convert(const std::string& input_list, const std::string& output_path,
     sources.Branch("adBelow0p3MeV", ad_below, "adBelow0p3MeV[4]/L");
     sources.Branch("adFrom0p3To0p6MeV", ad_band, "adFrom0p3To0p6MeV[4]/L");
     sources.Branch("muonEntries", &muon_entries, "muonEntries/L");
-    sources.Branch("poolAtMost5Hits", pool_below, "poolAtMost5Hits[2]/L");
 
     for (TTree* tree : {&ad, &calib, &sources}) {
       tree->SetAutoFlush(0);
@@ -375,7 +352,6 @@ void convert(const std::string& input_list, const std::string& output_path,
       kept_entries = 0;
       std::vector<unsigned char> keep(source_entries, 0);
       for (int ad_index = 0; ad_index < kAdCount; ++ad_index) ad_below[ad_index] = ad_band[ad_index] = 0;
-      pool_below[0] = pool_below[1] = 0;
       source_bytes = file_size(input_path);
       if (source_bytes < 0) throw std::runtime_error("cannot stat input: " + input_path);
       total_input_bytes += source_bytes;
@@ -393,10 +369,6 @@ void convert(const std::string& input_list, const std::string& output_path,
           if (selection_class == 1) ++ad_below[detector - 1];
           if (selection_class == 2) ++ad_band[detector - 1];
           if (enabled && selection_class != 0) continue;
-        }
-        if (is_pool(detector) && n_hit <= 5) {
-          ++pool_below[detector - 5];
-          if (enabled) continue;
         }
         keep[entry] = 1;
         if (ad.Fill() < 0 || calib.Fill() < 0)
@@ -432,7 +404,6 @@ void convert(const std::string& input_list, const std::string& output_path,
                     << processing_cpu_seconds << '\t' << kept_entries;
       for (int ad_index = 0; ad_index < kAdCount; ++ad_index)
         source_report << '\t' << ad_below[ad_index] << '\t' << ad_band[ad_index];
-      source_report << '\t' << pool_below[0] << '\t' << pool_below[1];
       source_report << '\n';
       total_entries += source_entries;
       total_kept_entries += kept_entries;
@@ -495,7 +466,7 @@ int main(int argc, char** argv) {
         "--run-number NUMBER [--ad-selection on|off]\n"
         "       slim-root --verify FILE | --version | --help\n"
         "AdSimpleNL, CalibStats and ARMuon are always required and their event rows must be aligned. "
-        "Selection keeps AD energy > 0.6 MeV and pool nHit > 5 in all three trees; other detectors are kept.";
+        "Selection keeps AD energy > 0.6 MeV in all three trees; all non-AD events are kept without an nHit cut.";
     if (argc == 2 && std::string(argv[1]) == "--help") {
       std::cout << usage << '\n';
       return 0;

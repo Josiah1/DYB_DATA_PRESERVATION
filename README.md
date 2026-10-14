@@ -7,8 +7,10 @@ a GPU, a batch scheduler, or the NuWa runtime for the retained scalar branches.
 
 Every conversion requires and stores three aligned event trees:
 `AdSimpleNL`, `CalibStats`, and `ARMuon`. There is no profile option.
-All entries are retained by default. Optional AD energy > 0.6 MeV and pool
-nHit > 5 cuts keep or remove the same original rows in all three trees.
+All entries are retained by default. The optional AD energy > 0.6 MeV cut
+keeps or removes the same original rows in all three trees. All non-AD events
+are retained, including pool events with the lowest `nHit` values needed for
+fast-neutron and muon studies. No `nHit` cut is applied.
 
 AD energy, position, and event metadata all come from `AdSimpleNL`, as in the
 base converter. `AdSimple`, `AdScaled`, and `AdScaledNL` are neither required
@@ -81,20 +83,18 @@ bin/slim-root --verify output/run21221.root
 converter does not infer it from filenames or check it against a run header.
 Check the input list before starting.
 
-`--ad-selection on` enables these detector-specific cuts:
+`--ad-selection on` applies this detector-specific selection:
 
 - ADs (detector 1–4): keep raw `AdSimpleNL.energy > 0.6 MeV`; discard values
   at or below the threshold and NaN.
-- Water pools (detector 5–6): keep `CalibStats.nHit > 5` (`NPmt > 5`);
-  discard values at or below 5, regardless of energy.
-- Other detectors, including RPC (7): keep every entry.
+- All non-AD detectors, including water pools (5–6) and RPC (7): keep every
+  entry regardless of `nHit` or energy.
 
 The converter always requires equal input row counts and matching AD/ARMuon
 event identifiers at every row, then applies one mask to all three trees.
-The decision uses `AdSimpleNL.energy` and `CalibStats.nHit`, never
+The decision uses the detector code and `AdSimpleNL.energy`, never
 `ARMuon.energy`. The default `--ad-selection off` retains all entries.
-The selected sample includes all AD events above 20 MeV and all pool events
-with `nHit > 5`.
+The selected sample includes all AD events above 20 MeV and every pool event.
 
 These cuts preserve the retained values and row alignment; they do not
 establish unchanged veto timing, trigger grouping, or live time in a downstream
@@ -162,14 +162,12 @@ guide for the event keys and provenance fields.
 | `adBelow0p3MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` at or below 0.3 MeV, including NaN |
 | `adFrom0p3To0p6MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` above 0.3 and at or below 0.6 MeV |
 | `muonEntries` | Number of input `ARMuon` entries (`Long64_t`), required to equal `entries` |
-| `poolAtMost5Hits[2]` | Input counts with `nHit <= 5`, in IWS (5), OWS (6) order; removed when selection is on |
 
 The tab-separated (TSV) report contains the shared row counts, timing, byte size, and per-AD
 energy-bin counts. The extra `muonEntries` counts are stored in the ROOT
 provenance tree. The bin counts are written even when selection is off.
-The TSV columns `iwsAtMost5Hits` and `owsAtMost5Hits` contain the pool counts.
 For selected output, `entries = keptEntries + sum(adBelow0p3MeV) +
-sum(adFrom0p3To0p6MeV) + sum(poolAtMost5Hits)` for each source.
+sum(adFrom0p3To0p6MeV)` for each source.
 With selection on, `muonEntries` remains the original input count; the retained
 ARMuon count is `keptEntries`. Its `sourceEntry` values keep their original
 input row numbers and can therefore have gaps.
@@ -182,7 +180,7 @@ forced process kill can leave `.partial.<pid>` files or a TSV without a final
 ROOT file. Remove leftovers only after checking that no process is writing
 them. A report alone does not establish successful conversion.
 
-`--verify` checks the schema, source accounting, timing, selected AD energies and pool hit counts,
+`--verify` checks the schema, source accounting, timing, selected AD energies,
 and row provenance. It always checks equal tree counts and matching AD/ARMuon
 event identities. It does not compare every output
 value against the original files, verify a good-run list, or prove the input
