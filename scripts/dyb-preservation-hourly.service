@@ -1,0 +1,8 @@
+[Unit]
+Description=Hourly DYB progress check and safe recovery request to existing Codex owner
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=%h/TOOLs/install/python-current/bin/python3 %h/WORK/Science/Dayabay-work/DYB_DATA_PRESERVATION/scripts/hourly_recovery.py
+TimeoutStartSec=300

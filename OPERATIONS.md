@@ -710,3 +710,81 @@ Original proof is in portable `provenance/worker-startup-eio-run71980.json`.
 The run remains 419 expected inputs, 416 usable minis and three earlier
 confirmed missing skips. Current retry/disposition belongs to the dated
 checkpoint rather than this static report.
+
+## 2026-10-14 run72099 and hourly recovery checks
+
+Run72099's original cluster 82201118 had converter SIGBUS failures in chunks
+7 and 16, on bws1006 and bws1008. These are not startup-only faults or evidence
+of missing/broken minis; the deeper SIGBUS cause remains unconfirmed. A fresh
+successful global query proved zero old jobs, worker markers and unresolved
+intents. Read-only source-header/runtime checks and quota checks found no
+contradictory input/storage evidence. Original logs, failure markers, receipts,
+catalog/source identities and good-chunk fingerprints were preserved before
+the authorized diagnostic second attempt, cluster 82235073. It completed all
+17 chunks: chunk 7 was converted and ROOT-verified on cws049; chunk 16 reused
+its existing verifiable output on lhcb001. All 75 recorded fingerprints of the
+15 previously good chunks remained unchanged. The expected catalog still has
+272 inputs, 270 processed and the same two confirmed missing minis, with no
+new gaps. Evidence is portable `provenance/worker-recovery-run72099.json` and
+the small ignored `build/oct14-recovery-result.json`. The existing production
+converter, worker, selection, schema and automatic failure classifier did not
+change for this recovery.
+
+The user authorized hourly checks and safe recovery through this same native
+Codex conversation. `scripts/hourly_recovery.py` starts the existing five-minute
+metadata checker, requires its fresh report, and records mount UUID, rw/driver,
+portable/internal free space, verified counters and controller queue/storage
+freshness. Healthy checks do not contact Codex or rehash the archive. Alerts or
+warnings request diagnosis/resumption using only the existing loaded owner and
+`gpt-6.1-sol` with max reasoning. The helper never restarts the campaign itself,
+creates a conversation/daemon, changes credentials or replays submissions.
+
+The private binding is `build/hourly-recovery/config.json` (mode 0600 in a 0700
+directory): `thread_id`, a unique `monitor_id`, this project's `cwd`,
+`model: "gpt-6.1-sol"` and `reasoning_effort: "max"`. It must identify the live
+authorized conversation; do not create a replacement owner. The current socket
+is resolved with `codex app-server daemon version` on each request. Native
+conversation reads/deletion use the installed ssh-ops `codex-rpc.py`; requests
+use installed `codex queue` with the explicit model/effort. No socket hash or
+thread ID belongs in tracked source, converter-share or public reports.
+
+Install the reviewed units after committing locally:
+
+```bash
+cp scripts/dyb-preservation-hourly.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now dyb-preservation-hourly.timer
+systemctl --user start dyb-preservation-hourly.service
+systemctl --user list-timers dyb-preservation-hourly.timer
+```
+
+`OnCalendar=hourly` checks at the top of each hour; `Persistent=true` catches a
+missed check after normal restart. User lingering is enabled on this Ubuntu
+host. An advisory lock and systemd's oneshot unit prevent overlap. Native queue
+reads deduplicate the exact monitor marker, remove only duplicate/cancelled
+requests owned by this monitor, and preserve other messages. An active recovery
+or uncertain delivery defers further requests; an idle owner is rechecked before
+another request. Intent is saved before queue mutation. No active turn is
+interrupted. Completion is based on `finished`, including an archive with
+recorded gaps; subsequent checks are cached no-ops, without claiming `complete`.
+
+State and the latest concise observation overwrite ignored
+`build/hourly-recovery/state.json` and `status.json`; failures are also visible
+in `journalctl --user -u dyb-preservation-hourly.service`. The native delivery
+probe was acknowledged in the existing conversation once, its redundant queued
+copy removed, and zero probe requests remained. Focused tests cover stopped and
+healthy cases, uncertain/active delivery, overlap, category-preserving completion,
+mount failures, private state, model binding and dynamic socket resolution.
+The dated private setup/runtime checkpoint is
+`build/oct14-hourly-recovery-result.json`.
+
+The timer survives reboot; the native backend/loaded owner must also be available
+for diagnosis. If unavailable, it records a visible blocker and retries next hour
+without starting a replacement session. An external site or integrity failure
+may still require diagnosis rather than an immediate safe restart. To disable:
+
+```bash
+systemctl --user disable --now dyb-preservation-hourly.timer
+```
+
+This leaves the campaign, its five-minute checker and existing CLI untouched.
