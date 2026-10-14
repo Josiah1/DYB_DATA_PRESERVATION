@@ -9,6 +9,10 @@
 void add_muon(const char* path, const char* fault = "") {
   TFile file(path, "UPDATE");
   auto* base = file.Get<TTree>("Event/Rec/AdSimpleNL");
+  Float_t muon_energy = 0;
+  UInt_t trigger_number = 0;
+  base->SetBranchAddress("energy", &muon_energy);
+  base->SetBranchAddress("triggerNumber", &trigger_number);
   file.cd("Event/Rec");
   base->SetBranchStatus("unusedBranch", false);
   auto* arm = base->CloneTree(0);
@@ -28,10 +32,15 @@ void add_muon(const char* path, const char* fault = "") {
   for (std::size_t i = 0; i < ints.size(); ++i)
     arm->Branch(ints[i].c_str(), &status[i], (ints[i] + "/I").c_str());
   if (std::string(fault) != "empty") {
-    // Deliberately sparse and reversed: ARMuon is not an entry-aligned friend.
-    for (Long64_t e = base->GetEntries(); e-- > 0;) {
+    const bool full = std::string(fault) == "aligned" || std::string(fault) == "reversed" ||
+                      std::string(fault) == "identity";
+    // The default tests a sparse, reversed stream; selection tests use full streams.
+    for (Long64_t i = 0; i < base->GetEntries(); ++i) {
+      const Long64_t e = full && std::string(fault) != "reversed" ? i : base->GetEntries() - 1 - i;
       base->GetEntry(e);
-      if (base->GetLeaf("detector")->GetValue() < 5) continue;
+      if (!full && base->GetLeaf("detector")->GetValue() < 5) continue;
+      if (full) muon_energy = muon_energy > 0.6 ? 0.1f : 100.f;
+      if (std::string(fault) == "identity" && e == 0) ++trigger_number;
       for (std::size_t i = 0; i < floats.size(); ++i) values[i] = 10.f * e + 0.25f * i;
       for (std::size_t i = 0; i < ints.size(); ++i) status[i] = (e + i) % 4;
       arm->Fill();
@@ -59,7 +68,7 @@ void add_unused_ad_trees(const char* path) {
   }
 }
 
-void compare_muon(const char* result, const char* first, const char* second) {
+void compare_muon(const char* result, const char* first, const char* second, bool selected = false) {
   TFile output(result);
   for (const char* name : {"AdSimple", "AdScaled", "AdScaledNL"})
     assert(!output.Get((std::string("Event/Rec/") + name).c_str()));
@@ -81,8 +90,14 @@ void compare_muon(const char* result, const char* first, const char* second) {
     for (std::size_t s = 0; s < paths.size(); ++s) {
       TFile input(paths[s]);
       auto* in = input.Get<TTree>(name);
+      auto* ad = input.Get<TTree>("Event/Rec/AdSimpleNL");
       for (Long64_t e = 0; e < in->GetEntries(); ++e) {
-        assert(in->GetEntry(e) > 0 && out->GetEntry(offset + e) > 0);
+        if (selected) {
+          assert(ad->GetEntry(e) > 0);
+          const auto detector = ad->GetLeaf("detector")->GetValueLong64();
+          if (detector >= 1 && detector <= 4 && !(ad->GetLeaf("energy")->GetValue() > 0.6)) continue;
+        }
+        assert(in->GetEntry(e) > 0 && out->GetEntry(offset) > 0);
         if (std::string(name) != "Event/Data/CalibStats")
           assert(out->GetLeaf("runNumber")->GetValueLong64() == 7777);
         if (arm) {
@@ -99,11 +114,26 @@ void compare_muon(const char* result, const char* first, const char* second) {
           assert(std::memcmp(original->GetValuePointer(), leaf->GetValuePointer(),
                              leaf->GetLenType()) == 0);
         }
+        ++offset;
       }
-      offset += in->GetEntries();
     }
     assert(out->GetEntries() == offset);
   }
+}
+
+void corrupt_muon_identity(const char* path) {
+  TFile file(path, "UPDATE");
+  auto* tree = file.Get<TTree>("Event/Rec/ARMuon");
+  UInt_t number = 0;
+  tree->SetBranchAddress("arm_triggerNumber", &number);
+  file.cd("Event/Rec");
+  auto* altered = tree->CloneTree(0);
+  for (Long64_t e = 0; e < tree->GetEntries(); ++e) {
+    tree->GetEntry(e);
+    if (e == 0) ++number;
+    altered->Fill();
+  }
+  altered->Write("ARMuon", TObject::kOverwrite);
 }
 
 void corrupt_muon_provenance(const char* path) {

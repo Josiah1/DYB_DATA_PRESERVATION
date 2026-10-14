@@ -1,9 +1,13 @@
 # Muon-analysis fields and event matching
 
 Use `--profile muon` with files containing `AdSimpleNL`, `CalibStats`, and
-`ARMuon`. This profile keeps all entries in those trees, so the pool sample
+`ARMuon`. By default this profile keeps all entries in those trees, so the pool sample
 with `NPmt > 5` and the AD sample with `AdSimpleNL.energy > 20 MeV` remain
 available for analysis cuts.
+
+Use `--profile muon --ad-selection on` to apply the 0.6 MeV AD threshold.
+The converter checks AD/ARMuon row alignment and applies the selection made
+from `AdSimpleNL.energy` to all three trees. Non-AD rows are retained.
 
 All AD energy, position, and event metadata are read from `AdSimpleNL`.
 The shared branch names in `AdSimple`, `AdScaled`, and `AdScaledNL` are not
@@ -36,7 +40,8 @@ quality values are copied without interpretation. Apply the reconstruction
 version's validity criteria before using a direction or fitted position;
 zero-valued fields alone do not establish a successful reconstruction.
 
-Converter v8 stores `AdSimpleNL`, `CalibStats`, and `ARMuon`. Earlier v6/v7
+Converter v9 adds shared AD selection for aligned three-tree inputs. Like v8,
+it stores `AdSimpleNL`, `CalibStats`, and `ARMuon`. Earlier v6/v7
 muon output also contained `AdSimple` and `AdScaled`; v6 used unprefixed
 `ARMuon` names. For new output, point AD readers at `AdSimpleNL` and use
 the prefixed muon names. Existing files retain their original schema.
@@ -93,25 +98,25 @@ analysis.
 
 In the original reconstruction format, `AdSimpleNL`, `CalibStats`, and
 `ARMuon` are expected to describe the same events in the same row order.
-Muon mode retains every row of all three trees, preserving that alignment
-when it is present in each input file. It requires `--ad-selection off`.
-Applying the 0.6 MeV cut to only the AD/calibration trees would break their
-row correspondence with an unfiltered `ARMuon`; filtering all three would
-require the same event mask.
+With selection off, muon mode retains every row of all three trees, preserving
+that alignment when it is present in each input file. With selection on, it
+requires equal row counts and checks the six AD/ARMuon event fields below at
+every input row. A mismatch stops conversion without publishing output.
+It applies the AD energy mask to all three trees, preserving row correspondence.
 
-The converter preserves each tree's input order but does not enforce matching
-event identifiers or equal counts for `ARMuon`. For an unfamiliar or modified
-input, verify alignment by comparing these `AdSimpleNL` fields row by row
+Selection off also supports separate or differently ordered ARMuon streams
+without assuming alignment. For an unfamiliar or modified input, verify
+alignment by comparing these `AdSimpleNL` fields row by row
 within the same source file:
 
 ```text
-site, detector, triggerNumber, triggerTimeSec, triggerTimeNanoSec
+site, detector, triggerNumber, triggerTimeSec, triggerTimeNanoSec, triggerType
 ```
 
 to these fields in `ARMuon`, in the same order:
 
 ```text
-arm_site, arm_detector, arm_triggerNumber, arm_triggerTimeSec, arm_triggerTimeNanoSec
+arm_site, arm_detector, arm_triggerNumber, arm_triggerTimeSec, arm_triggerTimeNanoSec, arm_triggerType
 ```
 
 For `ARMuon`, `sourceIndex` identifies the source directly. For `AdSimpleNL`,
@@ -124,6 +129,10 @@ matching row; report absent or ambiguous matches instead of taking a nearby
 timestamp. `sourceEntry` records a row's original position in its own tree
 and is a shared row index only when the input trees are aligned. If the event
 keys differ at the same row, use the keys to join the trees instead.
+With selection on, `sourceEntry` retains the original input row number;
+gaps mark removed rows and are expected. `Preservation/Sources.muonEntries`
+records the input count, while `keptEntries` records the retained count in
+each of the three trees.
 
 `sourceIndex` starts at zero for each output file. Across several converted
 files, include the output-file identity or resolve it through

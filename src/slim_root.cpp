@@ -26,7 +26,7 @@
 namespace {
 constexpr int kCompressionSettings = 509;  // ROOT ZSTD level 9.
 constexpr int kBasketBytes = 256 * 1024;
-constexpr const char* kVersion = "dyb-slim-v8";
+constexpr const char* kVersion = "dyb-slim-v9";
 constexpr int kAdCount = 4;              // AD detector codes 1-4.
 constexpr double kAdMinEnergyMeV = 0.6;
 constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.6].
@@ -133,7 +133,6 @@ long long verify_file(const std::string& path) {
                    std::string(profile->GetTitle()) != "muon"))
     throw std::runtime_error("missing or invalid conversion profile");
   const bool muon = std::string(profile->GetTitle()) == "muon";
-  if (muon && enabled) throw std::runtime_error("muon profile cannot have the mini AD cut");
 
   Long64_t first_entry = 0, source_entries = 0, kept_entries = 0, source_bytes = 0;
   Long64_t total_source_entries = 0, total_kept_entries = 0;
@@ -190,7 +189,7 @@ long long verify_file(const std::string& path) {
     if (is_ad(detector) && ad_class(energy) != 0)
       throw std::runtime_error("output holds an AD entry at or below the selection threshold: " + path);
   }
-  if (muon) verify_muon(file, sources);
+  if (muon) verify_muon(file, sources, ad, enabled);
   std::cout << "VERIFY entries=" << ad->GetEntries() << " source_entries=" << total_source_entries
             << " sources=" << sources->GetEntries() << " selection=" << (enabled ? "on" : "off")
             << " bytes=" << file_size(path) << '\n';
@@ -323,6 +322,8 @@ void convert(const std::string& input_list, const std::string& output_path,
       if (simple->GetEntries() != stats->GetEntries())
         throw std::runtime_error("tree entry mismatch: " + input_path);
       auto* muon_input = muon ? require_muon_tree(input_file) : nullptr;
+      if (muon && enabled && muon_input->GetEntries() != simple->GetEntries())
+        throw std::runtime_error("muon selection requires aligned tree entry counts: " + input_path);
 
       simple->SetBranchStatus("*", false);
       bind(simple, "site", &site);
@@ -351,6 +352,8 @@ void convert(const std::string& input_list, const std::string& output_path,
       first_entry = total_kept_entries;
       source_entries = simple->GetEntries();
       kept_entries = 0;
+      std::vector<unsigned char> keep_muon;
+      if (muon && enabled) keep_muon.resize(source_entries, 0);
       for (int ad_index = 0; ad_index < kAdCount; ++ad_index) ad_below[ad_index] = ad_band[ad_index] = 0;
       source_bytes = file_size(input_path);
       if (source_bytes < 0) throw std::runtime_error("cannot stat input: " + input_path);
@@ -370,6 +373,7 @@ void convert(const std::string& input_list, const std::string& output_path,
           if (selection_class == 2) ++ad_band[detector - 1];
           if (enabled && selection_class != 0) continue;
         }
+        if (muon && enabled) keep_muon[entry] = 1;
         if (ad.Fill() < 0 || calib.Fill() < 0)
           throw std::runtime_error("cannot write output event");
         ++kept_entries;
@@ -380,7 +384,8 @@ void convert(const std::string& input_list, const std::string& output_path,
         muon_source_index = static_cast<Long64_t>(source_index);
         muon_entries = muon_input->GetEntries();
         copy_muon_tree(muon_input, muon_output, rec_dir, stored_run_number,
-                       muon_source_index, muon_source_entry, muon_row);
+                       muon_source_index, muon_source_entry, muon_row,
+                       enabled ? simple : nullptr, keep_muon);
       }
       input_file.Close();
 
@@ -468,7 +473,8 @@ int main(int argc, char** argv) {
         "usage: slim-root --input-list FILE --output FILE --source-report FILE "
         "--run-number NUMBER [--ad-selection on|off] [--profile mini|muon]\n"
         "       slim-root --verify FILE | --version | --help\n"
-        "Muon mode requires AdSimpleNL, CalibStats and ARMuon, and --ad-selection off.";
+        "Muon mode requires AdSimpleNL, CalibStats and ARMuon. "
+        "With --ad-selection on, their event rows must be aligned.";
     if (argc == 2 && std::string(argv[1]) == "--help") {
       std::cout << usage << '\n';
       return 0;
@@ -492,7 +498,7 @@ int main(int argc, char** argv) {
     }
     if (input_list.empty() || output.empty() || source_report.empty() || run_number < 0 ||
         (selection != "on" && selection != "off") ||
-        (profile != "mini" && profile != "muon") || (profile == "muon" && selection != "off"))
+        (profile != "mini" && profile != "muon"))
       throw std::runtime_error(usage);
     convert(input_list, output, source_report, run_number, selection == "on", profile == "muon");
     return 0;
