@@ -896,21 +896,38 @@ def run_status(run_dir, stage_root):
 
 
 def lcg_startup_errors(run_dir, stage_root):
-    """Prove only observed setup-source failures, never converter/input faults or mixed failures."""
+    """Prove exact setup/pre-execution loader faults, never converter/input or mixed failures."""
     run_dir, marker = load_run(run_dir, stage_root)
     before = run_status(run_dir, stage_root)
     signature = before.get("failure_updates")
     failures = []
     worker = Path(marker["code_root"]) / "scripts/worker.sh"
     prefix = "{}: line 54: {}/setup.sh: ".format(worker, DEFAULT_LCG_VIEW)
+    converter = Path(marker["code_root"]) / "bin/slim-root"
+    loader_error = ("{}: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.31' not found "
+                    "(required by {})\n").format(converter, converter)
     for chunk in sorted(signature or {}):
         paths = [run_dir / "logs" / (chunk + ".err"), run_dir / "logs" / (chunk + ".out"),
                  run_dir / "status" / (chunk + ".fail")]
         if any(path.stat().st_size > 4096 for path in paths):
             break
         error, output, failure = [path.read_text() for path in paths]
-        if error not in (prefix + "No such file or directory\n", prefix + "Transport endpoint is not connected\n",
-                         prefix + "Input/output error\n"):
+        phase = "lcg_setup"
+        if error == loader_error:
+            phase = "cxx_loader"
+            artifact_prefix = "{}.slim.{}.".format(output_prefix(marker), chunk)
+            if ((run_dir / "status" / (chunk + ".report")).stat().st_size or any(
+                    path.name.startswith(artifact_prefix) for directory in (run_dir / "outputs", run_dir / "reports")
+                    for path in directory.iterdir())):
+                break
+            try:
+                (run_dir / "status" / (chunk + ".ok")).stat()
+            except FileNotFoundError:
+                pass
+            else:
+                break
+        elif error not in (prefix + "No such file or directory\n", prefix + "Transport endpoint is not connected\n",
+                           prefix + "Input/output error\n"):
             break
         status = re.fullmatch(r"rc=1\nhost=([^\s]+)\njob=(\d+)\.(\d+)\nfinished=([^\s]+)\n", failure)
         report = run_dir / "status" / (chunk + ".report")
@@ -923,7 +940,7 @@ def lcg_startup_errors(run_dir, stage_root):
             raise ValueError("startup failure does not match its current submission/chunk")
         if dt.datetime.fromisoformat(finished.replace("Z", "+00:00")).tzinfo is None:
             raise ValueError("startup failure timestamp has no timezone")
-        failures.append(dict(chunk=chunk, failure=failure, stderr=error, stdout=output,
+        failures.append(dict(chunk=chunk, phase=phase, failure=failure, stderr=error, stdout=output,
                              stderr_sha256=sha256_file(paths[0]), failure_sha256=sha256_file(paths[2])))
     after = run_status(run_dir, stage_root)
     if after.get("failure_updates") != signature:
@@ -949,7 +966,10 @@ def lcg_startup_errors(run_dir, stage_root):
     after = run_status(run_dir, stage_root)
     if after.get("failure_updates") != signature:
         return dict(recheck=True, failure_updates=after.get("failure_updates"))
-    return dict(startup=True, failure_updates=signature, failures=failures, worker_sha256=LCG_STARTUP_WORKER_SHA256)
+    proof = dict(startup=True, failure_updates=signature, failures=failures, worker_sha256=LCG_STARTUP_WORKER_SHA256)
+    if any(failure["phase"] == "cxx_loader" for failure in failures):
+        proof["converter_sha256"] = sha256_file(converter)
+    return proof
 
 
 def confirmed_empty_mini_errors(run_dir, stage_root):

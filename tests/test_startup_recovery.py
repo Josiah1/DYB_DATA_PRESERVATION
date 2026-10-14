@@ -47,6 +47,49 @@ class StartupRecoveryTests(unittest.TestCase):
     def retry(self):
         return preserve.submit_run(self.run, self.stage, 'dyw', 'short', 1024, True, 300, True, 2)
 
+    def write_loader_failure(self):
+        self.write_failure('000001')
+        converter = self.code / 'bin/slim-root'
+        converter.parent.mkdir(exist_ok=True)
+        converter.write_bytes(b'tiny converter identity fixture')
+        (self.run / 'status/000001.report').write_text('')
+        (self.run / 'logs/000001.err').write_text(
+            "{}: /lib64/libstdc++.so.6: version `GLIBCXX_3.4.31' not found (required by {})\n".format(
+                converter, converter))
+
+    def test_exact_loader_proof_rejects_partial_work_mixed_errors_and_io_failures(self):
+        self.write_loader_failure()
+        proof = preserve.lcg_startup_errors(self.run, self.stage)
+        self.assertTrue(proof['startup'])
+        self.assertEqual(proof['failures'][0]['phase'], 'cxx_loader')
+        self.assertEqual(proof['converter_sha256'], preserve.sha256_file(self.code / 'bin/slim-root'))
+        error_path = self.run / 'logs/000001.err'
+        original = error_path.read_text()
+        for error in (original + 'Bus error\n', original + 'ERROR source Input/output error\n',
+                      original.replace('GLIBCXX_3.4.31', 'GLIBCXX_3.4.32'),
+                      original.replace('/lib64/libstdc++.so.6', '/unrelated/libstdc++.so.6'),
+                      original.replace(str(self.code / 'bin/slim-root'), '/unrelated/converter')):
+            error_path.write_text(error)
+            self.assertFalse(preserve.lcg_startup_errors(self.run, self.stage)['startup'])
+        error_path.write_text(original)
+        prefix = preserve.output_prefix(self.marker) + '.slim.000001.'
+        artifacts = [self.run / 'outputs' / (prefix + suffix) for suffix in ('root', 'root.partial.42')]
+        artifacts += [self.run / 'reports' / (prefix + suffix) for suffix in ('sources.tsv', 'sources.tsv.partial.42')]
+        artifacts.append(self.run / 'status/000001.ok')
+        for path in artifacts:
+            path.write_bytes(b'')
+            self.assertFalse(preserve.lcg_startup_errors(self.run, self.stage)['startup'], str(path))
+            path.unlink()
+        for path in (self.run / 'logs/000001.out', self.run / 'status/000001.report'):
+            path.write_text('converter already ran')
+            self.assertFalse(preserve.lcg_startup_errors(self.run, self.stage)['startup'])
+            path.write_text('')
+        for error in (OSError(5, 'Input/output error'), PermissionError(13, 'Permission denied')):
+            with mock.patch.object(Path, 'iterdir', side_effect=error):
+                with self.assertRaises(type(error)): preserve.lcg_startup_errors(self.run, self.stage)
+        (self.run / 'status/000001.report').unlink()
+        with self.assertRaises(FileNotFoundError): preserve.lcg_startup_errors(self.run, self.stage)
+
     def test_exact_startup_proof_rejects_mixed_input_and_unknown_errors(self):
         for reason, eligible in [('No such file or directory', True), ('Transport endpoint is not connected', True),
                                  ('Input/output error', True), ('Permission denied', False)]:
@@ -99,6 +142,13 @@ class StartupRecoveryTests(unittest.TestCase):
             preserve.lcg_startup_errors(self.run, self.stage)
 
     def test_locked_second_attempt_preserves_proof_and_good_chunks_before_overwrite(self):
+        self.assert_locked_second_attempt()
+
+    def test_loader_second_attempt_preserves_proof_and_good_chunks_without_third_attempt(self):
+        self.write_loader_failure()
+        self.assert_locked_second_attempt()
+
+    def assert_locked_second_attempt(self):
         failure = (self.run / 'status/000001.fail').read_text()
         error = (self.run / 'logs/000001.err').read_text()
         def hep_sub(*unused, **kwargs):

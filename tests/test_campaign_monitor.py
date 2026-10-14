@@ -19,7 +19,7 @@ class CampaignMonitorTests(unittest.TestCase):
                           startup_recovery_pending=[dict(run='P17B/EH1/run71820', state='waiting_for_writers')])
         report = status_record(progress, service, {}, 100, controller)
         self.assertIsNone(report['alert'])
-        self.assertIn('Known LCG startup', report['warning']); self.assertIn('waiting_for_writers', report['warning'])
+        self.assertIn('Known worker startup', report['warning']); self.assertIn('waiting_for_writers', report['warning'])
         self.assertEqual((report['pending_inputs'], report['skipped_inputs']), (20, 2))
         for error in ('unknown worker failure', 'source I/O error', 'checksum mismatch', 'quota failure'):
             controller['error'] = error

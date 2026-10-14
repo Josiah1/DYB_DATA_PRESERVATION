@@ -558,8 +558,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_startup_failure_waits_for_writers_while_other_work_transfers_and_admits(self):
         records = preserve.inventory_records()[:3]
-        for exhausted in (False, True):
-            with self.subTest(exhausted=exhausted), tempfile.TemporaryDirectory() as temporary:
+        for exhausted, phase in ((False, 'lcg_setup'), (True, 'lcg_setup'), (False, 'cxx_loader'), (True, 'cxx_loader')):
+            with self.subTest(exhausted=exhausted, phase=phase), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root / 'provenance').mkdir()
                 local = root / 'data'; local.mkdir()
@@ -584,7 +584,8 @@ class PipelineTests(unittest.TestCase):
                 failed = stages[startup['run_dir']]
                 failed['submissions'] = [dict(cluster_id=42, submitted_at=preserve.utc_now())]
                 failed['status']['failure_updates'] = {'000000': [1, 1]}
-                failed['startup_failure'] = dict(startup=True, failure_updates={'000000': [1, 1]})
+                failed['startup_failure'] = dict(startup=True, failure_updates={'000000': [1, 1]},
+                                                 failures=[dict(phase=phase)])
                 retained = copy.deepcopy(failed)
                 jobs.append(dict(Iwd=startup['run_dir'], JobStatus=2, RequestCpus=1, ClusterId=42, ProcId=0))
 

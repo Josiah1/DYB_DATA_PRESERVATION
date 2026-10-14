@@ -934,3 +934,49 @@ run22262 reached 11/11 verified chunks at 15:59:21 UTC. All 45 old-good
 fingerprints were unchanged, and both recoveries recorded zero new input
 gaps. The resumed controller subsequently reverified run65318 before staging
 cleanup, admitted run22269 and continued the run65333 portable transfer.
+
+## 2026-10-14 run22540 C++ runtime-loader recovery
+
+The 17:00 UTC hourly check found 896 verified portable runs and a failed
+controller. In P17B/EH2/run22540, chunk 4 of cluster 82248333 exited rc=1 on
+lhws161 at 16:53:40 UTC. Its entire stderr was the dynamic loader's exact
+`/lib64/libstdc++.so.6: version 'GLIBCXX_3.4.31' not found` diagnostic naming
+the configured campaign converter as both executable and requiring object.
+stdout and the report were empty. This runtime failure is separate from
+missing/broken mini evidence and must not create a catalog omission.
+
+A successful fresh global query found two jobs, 183 staged runs (181 ready),
+416,673,886,440 reserved bytes and no unresolved intents. The original run's
+chunk 5 still had a live scheduler job and `.running` marker on lhws263; its
+55,795,013-byte partial had not advanced since 16:55:15 UTC. A bounded SSH
+probe of that execute node timed out. These observations do not prove the
+writer dead, so no cancellation, timeout reset or manual replay was used.
+
+The existing startup proof now admits only this additional exact loader
+diagnostic, with the pinned worker, current receipt/chunk/time, fixed mini
+catalog, empty stdout and unchanged failure snapshots. This case additionally
+requires an existing empty report, no chunk ROOT/source-report artifacts
+(including empty files and partials), and no OK marker. Artifact-directory
+I/O/permission errors propagate; they are never treated as absence. Proof
+records `phase=cxx_loader` and the converter SHA256. Other versions, paths,
+diagnostics, mixed/SIGBUS, post-conversion, source, checksum and storage
+failures remain ineligible. The worker, converter and LCG configuration are
+unchanged.
+
+This uses the existing visible `startup_recovery_pending` deferral so verified
+transfers and unaffected admissions can continue while writers remain. A
+fresh successful global query, no run writers/markers or unresolved intent,
+exclusive proof, preserved failure/good-chunk journal and the existing
+two-attempt cap are still required before automatic retry. The checker now
+describes both setup and loader cases as known worker startup faults.
+
+Validation: eight focused checks passed, then 67 relevant startup, pipeline,
+preservation, broken-mini, content, converter, monitor and hourly tests ran:
+63 passed and four skipped for unavailable supported ROOT/LCG runtimes.
+Checks cover exact/mixed signatures, zero-sized and partial artifacts, I/O
+and permission errors, proof preservation, unchanged good chunks, writer and
+intent guards, continued verified transfer/admission, second-attempt
+exhaustion and monitor clearance. Python/shell syntax and Git whitespace
+checks passed. Current deployment, retained-writer and runtime evidence is
+the small ignored `build/oct14-22540-recovery-result.json`; original portable
+proof is `provenance/worker-startup-loader-run22540.json`.
