@@ -777,3 +777,35 @@ systemctl --user disable --now dyb-preservation-hourly.timer
 ```
 
 This leaves the campaign, its five-minute checker and existing CLI untouched.
+
+### First scheduled recovery: EH2/run21511
+
+The 13:00 UTC hourly check on October 14 detected the failed controller and
+delivered one native recovery request to this existing owner. The controller
+had stopped at 12:49 UTC on chunk 0 of P17B/EH2/run21511, cluster 82236049.
+On aws006 the converter produced its output and source report, then ROOT
+library autoload warnings and a missing `GLIBCXX_3.4.31` symbol in system
+`libstdc++.so.6` prevented the verification process from running. Why that
+worker's library environment became inconsistent remains unconfirmed. This
+post-conversion failure deliberately remains outside startup-only and
+missing/broken-input classifiers.
+
+A fresh global query found one unrelated running job, no run21511 writers,
+worker markers or unresolved intent. Catalog/source identities and quota
+guards passed; the 16 affected mini headers were readable. The existing
+200,641,088-byte output passed independent ROOT verification under the
+configured LCG runtime, matching its source-report counts and exact chunk
+membership. Original stderr/stdout/report/failure marker, source list and
+receipt were preserved before the authorized second attempt, cluster
+82236093 at 13:03:17 UTC. Worker bwsjnws024 verified and reused that output at
+13:03:39 UTC, leaving its SHA256, size and mtime unchanged. All 12 chunks
+completed, with all 55 recorded fingerprints of the 11 previously good
+chunks unchanged. The fixed catalog remains 179 expected inputs, 178
+processed and one earlier confirmed missing mini, with zero new gaps.
+
+The single controller was restarted using the existing lock/mount guards;
+no worker, pipeline, converter, schema, physics, site setup or automatic
+failure classifier changed. Original proof is portable
+`provenance/worker-recovery-run21511-EH2.json`. Current resumed service,
+transfer, scheduler and checker evidence is in the small ignored
+`build/oct14-eh2-recovery-result.json`; the hourly schedule remains enabled.
