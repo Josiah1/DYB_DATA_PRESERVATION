@@ -809,3 +809,35 @@ failure classifier changed. Original proof is portable
 `provenance/worker-recovery-run21511-EH2.json`. Current resumed service,
 transfer, scheduler and checker evidence is in the small ignored
 `build/oct14-eh2-recovery-result.json`; the hourly schedule remains enabled.
+
+### Second scheduled recovery: EH2/run21543
+
+The 14:00 UTC check detected another failed controller. Chunk 2 of
+P17B/EH2/run21543, cluster 82236228, had finished conversion on aws006 before
+the verification process received SIGBUS at 13:15:27 UTC. Its stderr also
+reported the missing CVMFS ROOT backtrace script. This is the same node as
+the preceding library-loader failure, but the deeper fault remains
+unconfirmed. Neither failure qualifies as startup-only, missing or broken
+input; the strict automatic classifiers remain unchanged.
+
+Fresh global queries found one unrelated running job, zero writers/markers
+for run21543 and no unresolved intent. All 16 affected mini headers and exact
+catalog/source-report identities checked successfully. Under the configured
+LCG runtime its existing 197,269,082-byte output independently verified with
+12,397,032 retained events from 14,016,544 events across 16 sources. Original
+stderr/stdout/report/failure marker, receipts, sources and good fingerprints
+were preserved before the authorized second attempt, cluster 82236991 at
+14:07:57 UTC. Worker gecam006 verified/reused the output at 14:08:15 UTC.
+All five chunks completed; the recovered output's SHA256/size/mtime and all
+20 fingerprints of the four previously good chunks remained unchanged.
+The fixed catalog remains 74 expected and processed minis, with zero gaps.
+
+Installed HepJob help/source exposed dedicated-node requests and an `-extra`
+string attribute (`HepJob_ExtraAttr`), without establishing a supported
+negative-host constraint. No custom requirements or site configuration were
+applied, and no scheduler restriction was bypassed. Future aws006 failures
+remain a concrete operational risk monitored by the hourly owner. Only
+the existing guarded retry/restart was used; pipeline/worker/source/selection
+and attempt limits did not change. Portable proof is
+`provenance/worker-recovery-run21543-EH2.json`; the small ignored current
+checkpoint is `build/oct14-21543-recovery-result.json`.
