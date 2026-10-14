@@ -902,3 +902,30 @@ production code; live retry, preservation, transfer, controller and monitor
 results are in the small ignored `build/oct14-22131-recovery-result.json`.
 No source, worker, converter, schema, selection, shared site configuration,
 staging budget or attempt-limit change was made.
+
+run22131 reached 10/10 verified chunks at 15:42:43 UTC. All 35 old-good
+fingerprints and six original partial-file records were unchanged. Two
+replacement conversions succeeded on the original lhws304 node; this does
+not establish a persistent node fault or explain the earlier SIGBUS.
+
+### Follow-up recovery: EH2/run22262
+
+The final health check caught a new fatal worker error at 15:44:12 UTC in
+P17B/EH2/run22262, cluster 82243368. Chunks 7 and 8 had exited with SIGBUS on
+lhws182 shortly after starting the converter, with empty stdout and reports.
+The different execution phase was retained explicitly; neither failure was
+classified as missing/broken input or an eligible LCG setup failure.
+
+The run65318 transfer was allowed to verify and publish, bringing the archive
+to 891 runs, before the failed controller exited. The retry guard first
+refused while an original scheduler job still existed despite no `.running`
+markers. A later successful global query proved that run's writers were
+gone. Under the submission lock, both original failures, exact sources and
+all 45 fingerprints covering nine good chunks were saved before the single
+authorized second attempt, cluster 82244010 at 15:53:27 UTC. Other runs'
+unrelated jobs were retained. All 32 affected mini headers and the configured
+LCG verification of a good chunk passed. The full catalog remains 170 inputs
+with zero missing/broken omissions and zero new gaps. Portable original proof
+is `provenance/worker-recovery-run22262-EH2.json`; the small ignored current
+checkpoint is `build/oct14-22262-recovery-result.json`. Production code and
+all existing guards remain unchanged; the deeper SIGBUS cause is unconfirmed.
