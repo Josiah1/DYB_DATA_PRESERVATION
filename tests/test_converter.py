@@ -51,7 +51,7 @@ void make_source(const char* table, const char* output) {
   int det; std::string e; long s, n;
   while (in >> det >> e >> s >> n) {
     detector = det; energy = std::stof(e); sec = s; nano = n; ++triggerNumber;
-    x = triggerNumber; y = -x; z = 0.5f * x; nHit = 10 + det; stat = 0.25f * det;
+    x = triggerNumber; y = -x; z = 0.5f * x; nHit = triggerNumber % 12; stat = 0.25f * det;
     simple.Fill(); stats.Fill();
   }
   rec->cd(); simple.Write();
@@ -118,17 +118,21 @@ def expectation(rows):
     kept = 0
     below = [0] * 4
     band = [0] * 4
-    for detector, energy, _, _ in rows:
+    pool_counts = [0] * 2
+    for index, (detector, energy, _, _) in enumerate(rows, 1):
         value = as_float32(energy)
         if 1 <= detector <= 4 and not value > AD_MIN:
             (band if value > BAND_LOW else below)[detector - 1] += 1
         else:
             kept += 1
+        if detector in (5, 6) and index % 12 <= 5:
+            pool_counts[detector - 5] += 1
     stamps = [sec * 1000000000 + nano for _, _, sec, nano in rows]
     first, last = min(stamps), max(stamps)
     return {
-        "entries": len(rows), "kept": kept,
+        "entries": len(rows), "kept": kept - sum(pool_counts),
         "counts": [c for pair in zip(below, band) for c in pair],
+        "pool_counts": pool_counts,
         "first": divmod(first, 1000000000), "last": divmod(last, 1000000000),
         "duration": (last - first) / 1e9,
     }
@@ -181,6 +185,8 @@ class ConverterTests(unittest.TestCase):
             self.assertEqual(entries, expected["entries"])
             self.assertEqual(kept, expected["kept"] if mode == "on" else expected["entries"])
             self.assertEqual([int(f) for f in fields[12:20]], expected["counts"])
+            self.assertEqual(lines[0].split("\t")[20:], ["iwsAtMost5Hits", "owsAtMost5Hits"])
+            self.assertEqual([int(f) for f in fields[20:]], expected["pool_counts"])
             self.assertEqual(tuple(int(f) for f in fields[4:6]), expected["first"])
             self.assertEqual(tuple(int(f) for f in fields[6:8]), expected["last"])
             self.assertEqual(float(fields[8]), expected["duration"])
@@ -282,6 +288,7 @@ class ConverterTests(unittest.TestCase):
             self.root_call('add_muon("{}", "aligned");'.format(source))
         result, output, report = self.run_muon(extra=("--ad-selection", "on"))
         self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertTrue(all(sum(e["pool_counts"][i] for e in self.expected) > 0 for i in range(2)))
         kept = self.check_report(report, "on")
         self.assertGreater(kept, 0)
         self.assertLess(kept, sum(e["entries"] for e in self.expected))
@@ -292,6 +299,25 @@ class ConverterTests(unittest.TestCase):
         self.assertNotEqual(subprocess.run([str(CONVERTER), "--verify", str(output)],
                                           stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE).returncode, 0)
+
+    def test_pool_threshold_in_both_profiles_and_verifier_rejects_bad_hits(self):
+        for source in self.sources:
+            self.root_call('add_muon("{}", "aligned");'.format(source))
+        result, output, report = self.run_muon(extra=("--ad-selection", "on"))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        muon_kept = self.check_report(report, "on")
+        mini_output, mini_report, _ = self.convert("on", "mini")
+        mini_kept = self.check_report(mini_report, "on")
+        self.assertEqual(mini_kept, muon_kept)
+        unfiltered, off_report, _ = self.convert("off", "unfiltered")
+        self.check_report(off_report, "off")
+        for selected in (output, mini_output):
+            self.root_call('check_pool_boundaries("{}", "{}");'.format(selected, unfiltered))
+        self.root_call('corrupt_pool_hits("{}");'.format(output))
+        checked = subprocess.run([str(CONVERTER), "--verify", str(output)],
+                                 capture_output=True, text=True)
+        self.assertNotEqual(checked.returncode, 0)
+        self.assertIn("pool entry with nHit <= 5", checked.stderr)
 
     def test_muon_selection_rejects_unaligned_inputs_without_publishing(self):
         self.root_call('add_muon("{}", "aligned");'.format(self.sources[0]))

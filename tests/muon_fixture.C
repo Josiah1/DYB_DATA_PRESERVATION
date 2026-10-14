@@ -91,11 +91,14 @@ void compare_muon(const char* result, const char* first, const char* second, boo
       TFile input(paths[s]);
       auto* in = input.Get<TTree>(name);
       auto* ad = input.Get<TTree>("Event/Rec/AdSimpleNL");
+      auto* stats = input.Get<TTree>("Event/Data/CalibStats");
       for (Long64_t e = 0; e < in->GetEntries(); ++e) {
         if (selected) {
           assert(ad->GetEntry(e) > 0);
           const auto detector = ad->GetLeaf("detector")->GetValueLong64();
           if (detector >= 1 && detector <= 4 && !(ad->GetLeaf("energy")->GetValue() > 0.6)) continue;
+          assert(stats->GetEntry(e) > 0);
+          if ((detector == 5 || detector == 6) && stats->GetLeaf("nHit")->GetValueLong64() <= 5) continue;
         }
         assert(in->GetEntry(e) > 0 && out->GetEntry(offset) > 0);
         if (std::string(name) != "Event/Data/CalibStats")
@@ -119,6 +122,52 @@ void compare_muon(const char* result, const char* first, const char* second, boo
     }
     assert(out->GetEntries() == offset);
   }
+}
+
+void check_pool_boundaries(const char* muon_path, const char* mini_path) {
+  for (const char* path : {muon_path, mini_path}) {
+    const bool muon = path == muon_path;
+    TFile file(path);
+    auto* ad = file.Get<TTree>("Event/Rec/AdSimpleNL");
+    auto* stats = file.Get<TTree>("Event/Data/CalibStats");
+    Long64_t pool_five = 0, pool_six = 0, low_hit_ad = 0, low_hit_rpc = 0;
+    for (Long64_t e = 0; e < ad->GetEntries(); ++e) {
+      assert(ad->GetEntry(e) > 0 && stats->GetEntry(e) > 0);
+      const auto detector = ad->GetLeaf("detector")->GetValueLong64();
+      const auto hits = stats->GetLeaf("nHit")->GetValueLong64();
+      if (detector == 5 || detector == 6) {
+        if (muon) assert(hits > 5);
+        if (hits == 5) ++pool_five;
+        if (hits == 6) ++pool_six;
+      }
+      if (detector >= 1 && detector <= 4 && hits <= 5) ++low_hit_ad;
+      if (detector == 7 && hits <= 5) ++low_hit_rpc;
+    }
+    assert(pool_six > 0 && low_hit_ad > 0 && low_hit_rpc > 0);
+    assert(muon ? pool_five == 0 : pool_five > 0);
+  }
+}
+
+void corrupt_pool_hits(const char* path) {
+  TFile file(path, "UPDATE");
+  auto* ad = file.Get<TTree>("Event/Rec/AdSimpleNL");
+  auto* stats = file.Get<TTree>("Event/Data/CalibStats");
+  Int_t hits = 0;
+  stats->SetBranchAddress("nHit", &hits);
+  file.cd("Event/Data");
+  auto* altered = stats->CloneTree(0);
+  bool changed = false;
+  for (Long64_t e = 0; e < stats->GetEntries(); ++e) {
+    assert(ad->GetEntry(e) > 0 && stats->GetEntry(e) > 0);
+    const auto detector = ad->GetLeaf("detector")->GetValueLong64();
+    if (!changed && (detector == 5 || detector == 6)) {
+      hits = 5;
+      changed = true;
+    }
+    altered->Fill();
+  }
+  assert(changed);
+  altered->Write("CalibStats", TObject::kOverwrite);
 }
 
 void corrupt_muon_identity(const char* path) {

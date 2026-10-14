@@ -5,9 +5,11 @@ Use `--profile muon` with files containing `AdSimpleNL`, `CalibStats`, and
 with `NPmt > 5` and the AD sample with `AdSimpleNL.energy > 20 MeV` remain
 available for analysis cuts.
 
-Use `--profile muon --ad-selection on` to apply the 0.6 MeV AD threshold.
-The converter checks AD/ARMuon row alignment and applies the selection made
-from `AdSimpleNL.energy` to all three trees. Non-AD rows are retained.
+Use `--profile muon --ad-selection on` to keep AD events with energy > 0.6 MeV
+and pool events with `NPmt > 5`. Pool detectors are 5 and 6, and `NPmt` is read
+from `CalibStats.nHit`. The converter checks AD/ARMuon row alignment and
+applies one combined mask to all three trees. Other detectors, including RPC,
+are retained. These same AD/pool cuts also apply in selected mini mode.
 
 All AD energy, position, and event metadata are read from `AdSimpleNL`.
 The shared branch names in `AdSimple`, `AdScaled`, and `AdScaledNL` are not
@@ -40,8 +42,10 @@ quality values are copied without interpretation. Apply the reconstruction
 version's validity criteria before using a direction or fitted position;
 zero-valued fields alone do not establish a successful reconstruction.
 
-Converter v9 adds shared AD selection for aligned three-tree inputs. Like v8,
-it stores `AdSimpleNL`, `CalibStats`, and `ARMuon`. Earlier v6/v7
+Converter v10 adds the pool `nHit > 5` cut to selected output in both profiles
+and records per-pool rejection counts. Version v9 added shared AD selection
+for aligned three-tree inputs. Like v8, muon mode stores `AdSimpleNL`,
+`CalibStats`, and `ARMuon`. Earlier v6/v7
 muon output also contained `AdSimple` and `AdScaled`; v6 used unprefixed
 `ARMuon` names. For new output, point AD readers at `AdSimpleNL` and use
 the prefixed muon names. Existing files retain their original schema.
@@ -102,7 +106,9 @@ With selection off, muon mode retains every row of all three trees, preserving
 that alignment when it is present in each input file. With selection on, it
 requires equal row counts and checks the six AD/ARMuon event fields below at
 every input row. A mismatch stops conversion without publishing output.
-It applies the AD energy mask to all three trees, preserving row correspondence.
+It applies the combined AD-energy and pool-hit mask to all three trees,
+preserving row correspondence. CalibStats has no event identity fields in
+these minis; its original row pairing with AdSimpleNL is an input requirement.
 
 Selection off also supports separate or differently ordered ARMuon streams
 without assuming alignment. For an unfamiliar or modified input, verify
@@ -133,6 +139,7 @@ With selection on, `sourceEntry` retains the original input row number;
 gaps mark removed rows and are expected. `Preservation/Sources.muonEntries`
 records the input count, while `keptEntries` records the retained count in
 each of the three trees.
+`poolAtMost5Hits[2]` counts the original IWS and OWS rows with `nHit <= 5`.
 
 `sourceIndex` starts at zero for each output file. Across several converted
 files, include the output-file identity or resolve it through

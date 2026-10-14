@@ -9,8 +9,8 @@ Two profiles are available for antineutrino detector (AD) and muon analyses:
 
 | Profile | Required input | Event retention |
 | --- | --- | --- |
-| `mini` (default) | `AdSimpleNL` and `CalibStats` | All entries by default; optional raw `AdSimpleNL.energy > 0.6 MeV` cut for ADs |
-| `muon` | `AdSimpleNL`, `CalibStats`, and `ARMuon` | All entries by default; optional AD cut applied to all three aligned trees |
+| `mini` (default) | `AdSimpleNL` and `CalibStats` | All entries by default; optional AD energy > 0.6 MeV and pool nHit > 5 cuts |
+| `muon` | `AdSimpleNL`, `CalibStats`, and `ARMuon` | Same optional cuts, applied to all three aligned trees |
 
 AD energy, position, and event metadata all come from `AdSimpleNL`, as in the
 base converter. `AdSimple`, `AdScaled`, and `AdScaledNL` are neither required
@@ -83,16 +83,26 @@ bin/slim-root --verify output/run21221.root
 converter does not infer it from filenames or check it against a run header.
 Check the input list before starting.
 
-For mini files, use `--profile mini`. Add `--ad-selection on` only if the
-analysis accepts discarding AD entries with raw `AdSimpleNL.energy <= 0.6 MeV`
-or NaN. The cut applies to detector codes 1 through 4. Every other detector
-entry is retained, regardless of energy or `nHit`. The default is `off`.
-Muon mode also accepts `--ad-selection on`. It requires equal input row counts
-and matching AD/ARMuon event identifiers at every row, then applies the same
-AD energy mask to all three trees. The decision uses `AdSimpleNL.energy`,
-never `ARMuon.energy`. With the default `off`, all entries are retained.
-Both settings preserve the `AdSimpleNL.energy > 20 MeV` and pool `nHit > 5`
-samples for later analysis cuts.
+For mini files, use `--profile mini`. In both profiles, `--ad-selection on`
+enables these detector-specific cuts:
+
+- ADs (detector 1–4): keep raw `AdSimpleNL.energy > 0.6 MeV`; discard values
+  at or below the threshold and NaN.
+- Water pools (detector 5–6): keep `CalibStats.nHit > 5` (`NPmt > 5`);
+  discard values at or below 5, regardless of energy.
+- Other detectors, including RPC (7): keep every entry.
+
+Muon mode requires equal input row counts and matching AD/ARMuon event
+identifiers at every row, then applies the combined mask to all three trees.
+The decision uses `AdSimpleNL.energy` and `CalibStats.nHit`, never
+`ARMuon.energy`. The default `--ad-selection off` retains all entries.
+The selected sample includes all AD events above 20 MeV and all pool events
+with `nHit > 5`.
+
+These cuts preserve the retained values and row alignment; they do not
+establish unchanged veto timing, trigger grouping, or live time in a downstream
+analysis such as TWin. Retaining the complete trigger stream requires
+`--ad-selection off`.
 
 Run one conversion per output path. Both output names must be new and their
 parent directories must exist. Output filesystems must support hard links.
@@ -159,10 +169,14 @@ for the event keys and provenance fields.
 | `adBelow0p3MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` at or below 0.3 MeV, including NaN |
 | `adFrom0p3To0p6MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` above 0.3 and at or below 0.6 MeV |
 | `muonEntries` | Muon mode only: number of `ARMuon` entries in this source (`Long64_t`) |
+| `poolAtMost5Hits[2]` | Input counts with `nHit <= 5`, in IWS (5), OWS (6) order; removed when selection is on |
 
 The tab-separated (TSV) report contains the base-tree counts, timing, byte size, and per-AD
 energy-bin counts. The extra `muonEntries` counts are stored in the ROOT
 provenance tree. The bin counts are written even when selection is off.
+The TSV columns `iwsAtMost5Hits` and `owsAtMost5Hits` contain the pool counts.
+For selected v10 output, `entries = keptEntries + sum(adBelow0p3MeV) +
+sum(adFrom0p3To0p6MeV) + sum(poolAtMost5Hits)` for each source.
 With selection on, `muonEntries` remains the original input count; the retained
 ARMuon count is `keptEntries`. Its `sourceEntry` values keep their original
 input row numbers and can therefore have gaps.
@@ -175,7 +189,7 @@ forced process kill can leave `.partial.<pid>` files or a TSV without a final
 ROOT file. Remove leftovers only after checking that no process is writing
 them. A report alone does not establish successful conversion.
 
-`--verify` checks the schema, source accounting, timing, selected AD energies,
+`--verify` checks the schema, source accounting, timing, selected AD energies and pool hit counts,
 and muon stream counts and row provenance. For selected muon output it also
 checks equal tree counts and matching AD/ARMuon event identities. It does not compare every output
 value against the original files, verify a good-run list, or prove the input
