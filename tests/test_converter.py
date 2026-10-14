@@ -61,7 +61,8 @@ void make_source(const char* table, const char* output) {
 void check_format(const char* path) {
   TFile file(path);
   assert(!file.IsZombie() && file.GetCompressionSettings() == 509);
-  for (const char* name : {"Event/Rec/AdSimpleNL", "Event/Data/CalibStats"}) {
+  assert(!file.Get("Preservation/profile"));
+  for (const char* name : {"Event/Rec/AdSimpleNL", "Event/Data/CalibStats", "Event/Rec/ARMuon"}) {
     auto* tree = file.Get<TTree>(name);
     assert(tree && tree->GetAutoFlush() == 0 && tree->GetAutoSave() == 0);
     for (auto* object : *tree->GetListOfBranches()) {
@@ -128,7 +129,7 @@ def expectation(rows):
         if detector in (5, 6) and index % 12 <= 5:
             pool_counts[detector - 5] += 1
     stamps = [sec * 1000000000 + nano for _, _, sec, nano in rows]
-    first, last = min(stamps), max(stamps)
+    first, last = (min(stamps), max(stamps)) if stamps else (0, 0)
     return {
         "entries": len(rows), "kept": kept - sum(pool_counts),
         "counts": [c for pair in zip(below, band) for c in pair],
@@ -158,6 +159,7 @@ class ConverterTests(unittest.TestCase):
             self.assertTrue(output.stat().st_size > 0)
             self.sources.append(str(output))
             self.expected.append(expectation(rows))
+            self.root_call('add_muon("{}");'.format(output))
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -221,28 +223,26 @@ class ConverterTests(unittest.TestCase):
                         "-e", expression], check=True, stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT)
 
-    def run_muon(self, tag="muon", extra=()):
-        listing = self.root / "muon.list"
+    def run_converter(self, tag="converted", extra=()):
+        listing = self.root / "inputs.list"
         listing.write_text("\n".join(self.sources) + "\n")
         output, report = self.root / (tag + ".root"), self.root / (tag + ".tsv")
         result = subprocess.run(
             [str(CONVERTER), "--input-list", str(listing), "--output", str(output),
-             "--source-report", str(report), "--run-number", "7777", "--profile", "muon",
+             "--source-report", str(report), "--run-number", "7777",
              *extra], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         return result, output, report
 
-    def test_muon_values_and_independent_stream_order(self):
-        for source in self.sources:
-            self.root_call('add_muon("{}");'.format(source))
-        result, output, report = self.run_muon()
+    def test_all_three_trees_are_preserved_by_default(self):
+        result, output, report = self.run_converter()
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("profile=muon", result.stdout)
+        self.assertNotIn("profile=", result.stdout)
         self.check_report(report, "off")
         self.root_call('compare_muon("{}", "{}", "{}");'.format(output, *self.sources))
         subprocess.run([str(CONVERTER), "--verify", str(output)], check=True,
                        stdout=subprocess.PIPE)
         before = output.read_bytes(), report.read_bytes()
-        failed, _, _ = self.run_muon()
+        failed, _, _ = self.run_converter()
         self.assertNotEqual(failed.returncode, 0)
         self.assertEqual(before, (output.read_bytes(), report.read_bytes()))
         self.root_call('corrupt_muon_provenance("{}");'.format(output))
@@ -251,11 +251,10 @@ class ConverterTests(unittest.TestCase):
                                           stderr=subprocess.PIPE).returncode, 0)
 
     def test_incomplete_muon_input_fails_without_publishing(self):
-        self.root_call('add_muon("{}");'.format(self.sources[0]))
         for fault in ("missing", "type"):
             with self.subTest(fault=fault):
                 self.root_call('add_muon("{}", "{}");'.format(self.sources[1], fault))
-                result, output, report = self.run_muon(fault)
+                result, output, report = self.run_converter(fault)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertFalse(output.exists())
                 self.assertFalse(report.exists())
@@ -263,30 +262,50 @@ class ConverterTests(unittest.TestCase):
 
     def test_other_ad_reconstructions_are_ignored(self):
         for source in self.sources:
-            self.root_call('add_muon("{}"); add_unused_ad_trees("{}");'.format(source, source))
-        result, output, report = self.run_muon()
+            self.root_call('add_unused_ad_trees("{}");'.format(source))
+        result, output, report = self.run_converter()
         self.assertEqual(result.returncode, 0, result.stdout)
         self.check_report(report, "off")
         self.root_call('compare_muon("{}", "{}", "{}");'.format(output, *self.sources))
 
     def test_missing_muon_trees_and_invalid_arguments(self):
+        self.root_call('remove_muon("{}");'.format(self.sources[1]))
         for args in ((), ("--ad-selection", "on"), ("--run-number", "123junk")):
-            result, output, report = self.run_muon(extra=args)
+            result, output, report = self.run_converter(extra=args)
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertFalse(output.exists())
             self.assertFalse(report.exists())
+            self.assertFalse(list(self.root.glob("*.partial.*")))
+            if not args or args[0] == "--ad-selection":
+                self.assertIn("missing required tree: Event/Rec/ARMuon", result.stdout)
 
-    def test_empty_muon_stream_is_valid(self):
+    def test_empty_aligned_input_is_valid(self):
+        table = self.root / "empty.txt"
+        table.write_text("")
         for source in self.sources:
-            self.root_call('add_muon("{}", "empty");'.format(source))
-        result, output, report = self.run_muon()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.root_call('compare_muon("{}", "{}", "{}");'.format(output, *self.sources))
+            subprocess.run([find_root(), "-n", "-l", "-b", "-q",
+                            '{}("{}","{}")'.format(self.root / "make_source.C", table, source)],
+                           check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.root_call('add_muon("{}");'.format(source))
+        self.expected = [expectation([]) for _ in self.sources]
+        for mode in ("on", "off"):
+            output, report, metrics = self.convert(mode, "empty-" + mode)
+            self.assertEqual(self.check_report(report, mode), 0)
+            self.assertEqual(metrics["kept_entries"], "0")
+            self.root_call('compare_muon("{}", "{}", "{}");'.format(output, *self.sources))
+
+    def test_profile_option_is_removed(self):
+        help_text = subprocess.check_output([str(CONVERTER), "--help"], text=True)
+        self.assertNotIn("--profile", help_text)
+        for profile in ("mini", "muon"):
+            result, output, report = self.run_converter(extra=("--profile", profile))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown or incomplete argument: --profile", result.stdout)
+            self.assertFalse(output.exists())
+            self.assertFalse(report.exists())
 
     def test_muon_selection_preserves_the_same_rows_in_all_three_trees(self):
-        for source in self.sources:
-            self.root_call('add_muon("{}", "aligned");'.format(source))
-        result, output, report = self.run_muon(extra=("--ad-selection", "on"))
+        result, output, report = self.run_converter(extra=("--ad-selection", "on"))
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertTrue(all(sum(e["pool_counts"][i] for e in self.expected) > 0 for i in range(2)))
         kept = self.check_report(report, "on")
@@ -300,36 +319,38 @@ class ConverterTests(unittest.TestCase):
                                           stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE).returncode, 0)
 
-    def test_pool_threshold_in_both_profiles_and_verifier_rejects_bad_hits(self):
-        for source in self.sources:
-            self.root_call('add_muon("{}", "aligned");'.format(source))
-        result, output, report = self.run_muon(extra=("--ad-selection", "on"))
+    def test_pool_threshold_and_verifier_rejects_bad_hits(self):
+        result, output, report = self.run_converter(extra=("--ad-selection", "on"))
         self.assertEqual(result.returncode, 0, result.stdout)
-        muon_kept = self.check_report(report, "on")
-        mini_output, mini_report, _ = self.convert("on", "mini")
-        mini_kept = self.check_report(mini_report, "on")
-        self.assertEqual(mini_kept, muon_kept)
+        self.check_report(report, "on")
         unfiltered, off_report, _ = self.convert("off", "unfiltered")
         self.check_report(off_report, "off")
-        for selected in (output, mini_output):
-            self.root_call('check_pool_boundaries("{}", "{}");'.format(selected, unfiltered))
+        self.root_call('check_pool_boundaries("{}", "{}");'.format(output, unfiltered))
         self.root_call('corrupt_pool_hits("{}");'.format(output))
         checked = subprocess.run([str(CONVERTER), "--verify", str(output)],
                                  capture_output=True, text=True)
         self.assertNotEqual(checked.returncode, 0)
         self.assertIn("pool entry with nHit <= 5", checked.stderr)
 
-    def test_muon_selection_rejects_unaligned_inputs_without_publishing(self):
-        self.root_call('add_muon("{}", "aligned");'.format(self.sources[0]))
-        for fault in ("empty", "reversed", "identity"):
-            with self.subTest(fault=fault):
-                self.root_call('add_muon("{}", "{}");'.format(self.sources[1], fault))
-                result, output, report = self.run_muon(fault, ("--ad-selection", "on"))
-                self.assertNotEqual(result.returncode, 0, result.stdout)
-                self.assertIn("muon selection requires aligned", result.stdout)
-                self.assertFalse(output.exists())
-                self.assertFalse(report.exists())
-                self.assertFalse(list(self.root.glob("*.partial.*")))
+    def test_unaligned_inputs_are_rejected_with_cuts_on_or_off(self):
+        for fault in ("empty", "sparse", "reversed", "identity"):
+            self.root_call('add_muon("{}", "{}");'.format(self.sources[1], fault))
+            for mode in ("on", "off"):
+                with self.subTest(fault=fault, mode=mode):
+                    result, output, report = self.run_converter(fault, ("--ad-selection", mode))
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("conversion requires aligned", result.stdout)
+                    self.assertFalse(output.exists())
+                    self.assertFalse(report.exists())
+                    self.assertFalse(list(self.root.glob("*.partial.*")))
+
+    def test_unfiltered_verifier_rejects_mismatched_event_rows(self):
+        result, output, _ = self.run_converter()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.root_call('corrupt_muon_identity("{}");'.format(output))
+        checked = subprocess.run([str(CONVERTER), "--verify", str(output)], capture_output=True, text=True)
+        self.assertNotEqual(checked.returncode, 0)
+        self.assertIn("ARMuon and AD event identities differ", checked.stderr)
 
     def test_all_entries_cut_produces_a_verifiable_empty_file(self):
         rows = [(1, 0.1, 1500000000, 42)]
@@ -340,14 +361,9 @@ class ConverterTests(unittest.TestCase):
                         '{}("{}","{}")'.format(self.root / "make_source.C", table, source)],
                        check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.sources, self.expected = [str(source)], [expectation(rows)]
+        self.root_call('add_muon("{}");'.format(source))
         output, report, metrics = self.convert("on", "empty")
         self.assertEqual(metrics["kept_entries"], "0")
         self.assertEqual(self.check_report(report, "on"), 0)
         subprocess.run([str(CONVERTER), "--verify", str(output)], check=True,
-                       stdout=subprocess.PIPE)
-        self.root_call('add_muon("{}", "aligned");'.format(source))
-        result, muon_output, muon_report = self.run_muon(extra=("--ad-selection", "on"))
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(self.check_report(muon_report, "on"), 0)
-        subprocess.run([str(CONVERTER), "--verify", str(muon_output)], check=True,
                        stdout=subprocess.PIPE)

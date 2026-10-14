@@ -1,15 +1,15 @@
 # Muon-analysis fields and event matching
 
-Use `--profile muon` with files containing `AdSimpleNL`, `CalibStats`, and
-`ARMuon`. By default this profile keeps all entries in those trees, so the pool sample
+Every conversion requires aligned `AdSimpleNL`, `CalibStats`, and
+`ARMuon` trees and stores them together. By default it keeps all entries, so the pool sample
 with `NPmt > 5` and the AD sample with `AdSimpleNL.energy > 20 MeV` remain
 available for analysis cuts.
 
-Use `--profile muon --ad-selection on` to keep AD events with energy > 0.6 MeV
+Use `--ad-selection on` to keep AD events with energy > 0.6 MeV
 and pool events with `NPmt > 5`. Pool detectors are 5 and 6, and `NPmt` is read
 from `CalibStats.nHit`. The converter checks AD/ARMuon row alignment and
 applies one combined mask to all three trees. Other detectors, including RPC,
-are retained. These same AD/pool cuts also apply in selected mini mode.
+are retained.
 
 All AD energy, position, and event metadata are read from `AdSimpleNL`.
 The shared branch names in `AdSimple`, `AdScaled`, and `AdScaledNL` are not
@@ -17,8 +17,8 @@ read or duplicated. The converter applies no new energy calibration.
 
 The `ARMuon` fields follow `dyb.pdf`, page 2, and the AD/calibration mapping
 below uses the stream variables on page 3 (13 October 2026), with `AdSimpleNL`
-as the AD reconstruction source. Muon mode requires the original reconstruction
-files when the minis omit `ARMuon`.
+as the AD reconstruction source. If a mini omits `ARMuon`, it cannot be used
+with this converter; supply a file containing all three trees.
 
 ## ARMuon fields
 
@@ -42,13 +42,12 @@ quality values are copied without interpretation. Apply the reconstruction
 version's validity criteria before using a direction or fitted position;
 zero-valued fields alone do not establish a successful reconstruction.
 
-Converter v10 adds the pool `nHit > 5` cut to selected output in both profiles
-and records per-pool rejection counts. Version v9 added shared AD selection
-for aligned three-tree inputs. Like v8, muon mode stores `AdSimpleNL`,
-`CalibStats`, and `ARMuon`. Earlier v6/v7
-muon output also contained `AdSimple` and `AdScaled`; v6 used unprefixed
-`ARMuon` names. For new output, point AD readers at `AdSimpleNL` and use
-the prefixed muon names. Existing files retain their original schema.
+Converter v11 removes the profile option and requires all three trees to
+align, with cuts on or off. Remove `--profile` from older commands. The
+`Preservation/profile` metadata is no longer written. Existing files retain
+their original schema and should be verified with the executable that
+created them. For new output, point AD readers at `AdSimpleNL` and use the
+prefixed ARMuon names.
 
 ## AD and calibration fields
 
@@ -75,7 +74,7 @@ derived observables.
 
 ## Reading the AD and pool samples
 
-`AdSimpleNL` and `CalibStats` have aligned output entries in muon mode. A ROOT
+`AdSimpleNL` and `CalibStats` always have aligned output entries. A ROOT
 session can inspect the requested selections directly:
 
 ```cpp
@@ -102,18 +101,15 @@ analysis.
 
 In the original reconstruction format, `AdSimpleNL`, `CalibStats`, and
 `ARMuon` are expected to describe the same events in the same row order.
-With selection off, muon mode retains every row of all three trees, preserving
-that alignment when it is present in each input file. With selection on, it
-requires equal row counts and checks the six AD/ARMuon event fields below at
-every input row. A mismatch stops conversion without publishing output.
-It applies the combined AD-energy and pool-hit mask to all three trees,
+The converter requires equal row counts and checks the six AD/ARMuon event
+fields below at every input row, whether selection is on or off. A mismatch
+stops conversion without publishing output. With selection on, it applies
+the combined AD-energy and pool-hit mask to all three trees,
 preserving row correspondence. CalibStats has no event identity fields in
 these minis; its original row pairing with AdSimpleNL is an input requirement.
 
-Selection off also supports separate or differently ordered ARMuon streams
-without assuming alignment. For an unfamiliar or modified input, verify
-alignment by comparing these `AdSimpleNL` fields row by row
-within the same source file:
+Separate, sparse, or differently ordered ARMuon streams are rejected. These
+`AdSimpleNL` fields are compared row by row within the same source file:
 
 ```text
 site, detector, triggerNumber, triggerTimeSec, triggerTimeNanoSec, triggerType
@@ -130,11 +126,9 @@ find the row of `Preservation/Sources` whose output range contains the AD
 entry: `firstEntry <= entry < firstEntry + keptEntries`. That provenance
 row's zero-based index is the corresponding source index.
 
-After finding the matching AD row, read `CalibStats` at that AD row to obtain `nHit`. Require one
-matching row; report absent or ambiguous matches instead of taking a nearby
-timestamp. `sourceEntry` records a row's original position in its own tree
-and is a shared row index only when the input trees are aligned. If the event
-keys differ at the same row, use the keys to join the trees instead.
+Read the same output row in all three trees; for example, `CalibStats.nHit`
+belongs to that row's AD/ARMuon event. `sourceEntry` records the shared
+original input row index. No nearest-time matching or event join is needed.
 With selection on, `sourceEntry` retains the original input row number;
 gaps mark removed rows and are expected. `Preservation/Sources.muonEntries`
 records the input count, while `keptEntries` records the retained count in
@@ -164,7 +158,7 @@ ordered analysis stream.
 
 ## Scope of the retained data
 
-This profile covers the named scalar fields in the supplied instruction.
+This converter covers the named scalar fields in the supplied instruction.
 It does not preserve all contents of the original ROOT file. RPC tracks,
 per-PMT waveforms or calibrated hit arrays, run headers, detector conditions,
 and live-time counters are outside this schema. Keep the corresponding

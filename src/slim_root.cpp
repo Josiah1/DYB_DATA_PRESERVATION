@@ -26,14 +26,10 @@
 namespace {
 constexpr int kCompressionSettings = 509;  // ROOT ZSTD level 9.
 constexpr int kBasketBytes = 256 * 1024;
-constexpr const char* kVersion = "dyb-slim-v10";
+constexpr const char* kVersion = "dyb-slim-v11";
 constexpr int kAdCount = 4;              // AD detector codes 1-4.
 constexpr double kAdMinEnergyMeV = 0.6;
 constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.6].
-constexpr const char* kLegacySelectionOn =
-    "AD entries (detector 1-4) kept when energy > 0.6 MeV; dropped AD entries counted per source "
-    "and detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.6 MeV "
-    "(adFrom0p3To0p6MeV); every other detector kept; timestamps cover every source trigger";
 constexpr const char* kSelectionOn =
     "AD entries (detector 1-4) kept when energy > 0.6 MeV; pool entries (detector 5-6) kept "
     "when CalibStats.nHit > 5; one shared mask applied to all retained event trees; "
@@ -119,6 +115,9 @@ void require_branches(TTree* tree, const std::vector<std::string>& names) {
 long long verify_file(const std::string& path) {
   TFile file(path.c_str(), "READ");
   if (file.IsZombie()) throw std::runtime_error("cannot open output: " + path);
+  auto* version = dynamic_cast<TNamed*>(file.Get("Preservation/converterVersion"));
+  if (!version || std::string(version->GetTitle()) != kVersion)
+    throw std::runtime_error("output converter version is missing or different: " + path);
   auto* ad = dynamic_cast<TTree*>(file.Get("Event/Rec/AdSimpleNL"));
   auto* calib = dynamic_cast<TTree*>(file.Get("Event/Data/CalibStats"));
   auto* sources = dynamic_cast<TTree*>(file.Get("Preservation/Sources"));
@@ -131,15 +130,9 @@ long long verify_file(const std::string& path) {
   if (sources->GetEntries() <= 0) throw std::runtime_error("source manifest is empty: " + path);
   auto* selection = dynamic_cast<TNamed*>(file.Get("Preservation/selection"));
   const std::string selection_title = selection ? selection->GetTitle() : "";
-  if (selection_title != kSelectionOn && selection_title != kLegacySelectionOn && selection_title != kSelectionOff)
+  if (selection_title != kSelectionOn && selection_title != kSelectionOff)
     throw std::runtime_error("output selection metadata is missing or different: " + path);
   const bool enabled = selection_title != kSelectionOff;
-  const bool pool_selection = selection_title == kSelectionOn;
-  auto* profile = dynamic_cast<TNamed*>(file.Get("Preservation/profile"));
-  if (!profile || (std::string(profile->GetTitle()) != "mini" &&
-                   std::string(profile->GetTitle()) != "muon"))
-    throw std::runtime_error("missing or invalid conversion profile");
-  const bool muon = std::string(profile->GetTitle()) == "muon";
 
   Long64_t first_entry = 0, source_entries = 0, kept_entries = 0, source_bytes = 0;
   Long64_t total_source_entries = 0, total_kept_entries = 0;
@@ -152,7 +145,7 @@ long long verify_file(const std::string& path) {
   sources->SetBranchAddress("keptEntries", &kept_entries);
   sources->SetBranchAddress("adBelow0p3MeV", ad_below);
   sources->SetBranchAddress("adFrom0p3To0p6MeV", ad_band);
-  if (pool_selection) {
+  {
     auto* leaf = sources->GetLeaf("poolAtMost5Hits");
     if (!leaf || leaf->GetLeafCount() || leaf->GetLenStatic() != 2 ||
         std::string(leaf->GetTypeName()) != "Long64_t")
@@ -181,11 +174,9 @@ long long verify_file(const std::string& path) {
         throw std::runtime_error("negative AD selection count: " + path);
       dropped += ad_below[ad_index] + ad_band[ad_index];
     }
-    if (pool_selection) {
-      for (auto count : pool_below) {
-        if (count < 0) throw std::runtime_error("negative pool selection count: " + path);
-        dropped += count;
-      }
+    for (auto count : pool_below) {
+      if (count < 0) throw std::runtime_error("negative pool selection count: " + path);
+      dropped += count;
     }
     if (enabled ? kept_entries + dropped != source_entries
                 : kept_entries != source_entries || dropped > source_entries)
@@ -206,21 +197,17 @@ long long verify_file(const std::string& path) {
   ad->SetBranchStatus("*", false);
   bind(ad, "detector", &detector);
   bind(ad, "energy", &energy);
-  if (pool_selection) {
-    calib->SetBranchStatus("*", false);
-    bind(calib, "nHit", &n_hit);
-  }
+  calib->SetBranchStatus("*", false);
+  bind(calib, "nHit", &n_hit);
   for (Long64_t entry = 0; enabled && entry < ad->GetEntries(); ++entry) {
     if (ad->GetEntry(entry) <= 0) throw std::runtime_error("cannot read output entry: " + path);
     if (is_ad(detector) && ad_class(energy) != 0)
       throw std::runtime_error("output holds an AD entry at or below the selection threshold: " + path);
-    if (pool_selection) {
-      if (calib->GetEntry(entry) <= 0) throw std::runtime_error("cannot read output calibration entry: " + path);
-      if (is_pool(detector) && n_hit <= 5)
-        throw std::runtime_error("output holds a pool entry with nHit <= 5: " + path);
-    }
+    if (calib->GetEntry(entry) <= 0) throw std::runtime_error("cannot read output calibration entry: " + path);
+    if (is_pool(detector) && n_hit <= 5)
+      throw std::runtime_error("output holds a pool entry with nHit <= 5: " + path);
   }
-  if (muon) verify_muon(file, sources, ad, enabled);
+  verify_muon(file, sources, ad, enabled);
   std::cout << "VERIFY entries=" << ad->GetEntries() << " source_entries=" << total_source_entries
             << " sources=" << sources->GetEntries() << " selection=" << (enabled ? "on" : "off")
             << " bytes=" << file_size(path) << '\n';
@@ -228,7 +215,7 @@ long long verify_file(const std::string& path) {
 }
 
 void convert(const std::string& input_list, const std::string& output_path,
-             const std::string& source_report_path, int run_number, bool enabled, bool muon) {
+             const std::string& source_report_path, int run_number, bool enabled) {
   const auto inputs = read_inputs(input_list);
   if (std::filesystem::exists(output_path) || std::filesystem::exists(source_report_path))
     throw std::runtime_error("refusing to overwrite output or source report");
@@ -335,7 +322,7 @@ void convert(const std::string& input_list, const std::string& output_path,
     sources.Branch("processingCpuSeconds", &processing_cpu_seconds, "processingCpuSeconds/D");
     sources.Branch("adBelow0p3MeV", ad_below, "adBelow0p3MeV[4]/L");
     sources.Branch("adFrom0p3To0p6MeV", ad_band, "adFrom0p3To0p6MeV[4]/L");
-    if (muon) sources.Branch("muonEntries", &muon_entries, "muonEntries/L");
+    sources.Branch("muonEntries", &muon_entries, "muonEntries/L");
     sources.Branch("poolAtMost5Hits", pool_below, "poolAtMost5Hits[2]/L");
 
     for (TTree* tree : {&ad, &calib, &sources}) {
@@ -355,9 +342,9 @@ void convert(const std::string& input_list, const std::string& output_path,
       if (!simple || !stats) throw std::runtime_error("missing required tree: " + input_path);
       if (simple->GetEntries() != stats->GetEntries())
         throw std::runtime_error("tree entry mismatch: " + input_path);
-      auto* muon_input = muon ? require_muon_tree(input_file) : nullptr;
-      if (muon && enabled && muon_input->GetEntries() != simple->GetEntries())
-        throw std::runtime_error("muon selection requires aligned tree entry counts: " + input_path);
+      auto* muon_input = require_muon_tree(input_file);
+      if (muon_input->GetEntries() != simple->GetEntries())
+        throw std::runtime_error("conversion requires aligned tree entry counts: " + input_path);
 
       simple->SetBranchStatus("*", false);
       bind(simple, "site", &site);
@@ -386,8 +373,7 @@ void convert(const std::string& input_list, const std::string& output_path,
       first_entry = total_kept_entries;
       source_entries = simple->GetEntries();
       kept_entries = 0;
-      std::vector<unsigned char> keep_muon;
-      if (muon && enabled) keep_muon.resize(source_entries, 0);
+      std::vector<unsigned char> keep(source_entries, 0);
       for (int ad_index = 0; ad_index < kAdCount; ++ad_index) ad_below[ad_index] = ad_band[ad_index] = 0;
       pool_below[0] = pool_below[1] = 0;
       source_bytes = file_size(input_path);
@@ -412,20 +398,17 @@ void convert(const std::string& input_list, const std::string& output_path,
           ++pool_below[detector - 5];
           if (enabled) continue;
         }
-        if (muon && enabled) keep_muon[entry] = 1;
+        keep[entry] = 1;
         if (ad.Fill() < 0 || calib.Fill() < 0)
           throw std::runtime_error("cannot write output event");
         ++kept_entries;
       }
       if (ad.FlushBaskets() < 0 || calib.FlushBaskets() < 0)
         throw std::runtime_error("cannot flush output events");
-      if (muon) {
-        muon_source_index = static_cast<Long64_t>(source_index);
-        muon_entries = muon_input->GetEntries();
-        copy_muon_tree(muon_input, muon_output, rec_dir, stored_run_number,
-                       muon_source_index, muon_source_entry, muon_row,
-                       enabled ? simple : nullptr, keep_muon);
-      }
+      muon_source_index = static_cast<Long64_t>(source_index);
+      muon_entries = muon_input->GetEntries();
+      copy_muon_tree(muon_input, muon_output, rec_dir, stored_run_number,
+                     muon_source_index, muon_source_entry, muon_row, simple, keep);
       input_file.Close();
 
       if (source_entries > 0) {
@@ -457,15 +440,14 @@ void convert(const std::string& input_list, const std::string& output_path,
 
     rec_dir->cd();
     if (ad.Write() <= 0) throw std::runtime_error("cannot write AD tree");
-    if (muon_output && muon_output->Write() <= 0) throw std::runtime_error("cannot write muon tree");
+    if (muon_output->Write() <= 0) throw std::runtime_error("cannot write muon tree");
     data_dir->cd();
     if (calib.Write() <= 0) throw std::runtime_error("cannot write CalibStats tree");
     preservation_dir->cd();
     if (sources.Write() <= 0) throw std::runtime_error("cannot write source tree");
     TNamed selection("selection", enabled ? kSelectionOn : kSelectionOff);
-    TNamed profile("profile", muon ? "muon" : "mini");
     TNamed version("converterVersion", kVersion);
-    if (selection.Write() <= 0 || profile.Write() <= 0 || version.Write() <= 0 ||
+    if (selection.Write() <= 0 || version.Write() <= 0 ||
         output_file.TestBit(TFile::kWriteError))
       throw std::runtime_error("cannot finish output metadata");
     output_file.Close();
@@ -490,7 +472,6 @@ void convert(const std::string& input_list, const std::string& output_path,
       std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
   const double used_cpu_seconds = cpu_seconds() - cpu_start;
   std::cout << "RESULT version=" << kVersion << " selection=" << (enabled ? "on" : "off")
-            << " profile=" << (muon ? "muon" : "mini")
             << " sources=" << inputs.size()
             << " entries=" << total_entries << " kept_entries=" << total_kept_entries
             << " input_bytes=" << total_input_bytes
@@ -511,16 +492,15 @@ int main(int argc, char** argv) {
     }
     const std::string usage =
         "usage: slim-root --input-list FILE --output FILE --source-report FILE "
-        "--run-number NUMBER [--ad-selection on|off] [--profile mini|muon]\n"
+        "--run-number NUMBER [--ad-selection on|off]\n"
         "       slim-root --verify FILE | --version | --help\n"
-        "Muon mode requires AdSimpleNL, CalibStats and ARMuon. "
-        "With --ad-selection on, their event rows must be aligned. "
-        "In both profiles selection keeps AD energy > 0.6 MeV and pool nHit > 5; other detectors are kept.";
+        "AdSimpleNL, CalibStats and ARMuon are always required and their event rows must be aligned. "
+        "Selection keeps AD energy > 0.6 MeV and pool nHit > 5 in all three trees; other detectors are kept.";
     if (argc == 2 && std::string(argv[1]) == "--help") {
       std::cout << usage << '\n';
       return 0;
     }
-    std::string input_list, output, source_report, selection = "off", profile = "mini";
+    std::string input_list, output, source_report, selection = "off";
     int run_number = -1;
     for (int i = 1; i < argc; ++i) {
       const std::string arg = argv[i];
@@ -534,14 +514,12 @@ int main(int argc, char** argv) {
         run_number = std::stoi(value);
       }
       else if (arg == "--ad-selection" && i + 1 < argc) selection = argv[++i];
-      else if (arg == "--profile" && i + 1 < argc) profile = argv[++i];
       else throw std::runtime_error("unknown or incomplete argument: " + arg);
     }
     if (input_list.empty() || output.empty() || source_report.empty() || run_number < 0 ||
-        (selection != "on" && selection != "off") ||
-        (profile != "mini" && profile != "muon"))
+        (selection != "on" && selection != "off"))
       throw std::runtime_error(usage);
-    convert(input_list, output, source_report, run_number, selection == "on", profile == "muon");
+    convert(input_list, output, source_report, run_number, selection == "on");
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "ERROR " << error.what() << '\n';

@@ -32,9 +32,8 @@ void add_muon(const char* path, const char* fault = "") {
   for (std::size_t i = 0; i < ints.size(); ++i)
     arm->Branch(ints[i].c_str(), &status[i], (ints[i] + "/I").c_str());
   if (std::string(fault) != "empty") {
-    const bool full = std::string(fault) == "aligned" || std::string(fault) == "reversed" ||
-                      std::string(fault) == "identity";
-    // The default tests a sparse, reversed stream; selection tests use full streams.
+    const bool full = std::string(fault) != "sparse";
+    // ARMuon energy deliberately disagrees with AD energy to test the shared mask.
     for (Long64_t i = 0; i < base->GetEntries(); ++i) {
       const Long64_t e = full && std::string(fault) != "reversed" ? i : base->GetEntries() - 1 - i;
       base->GetEntry(e);
@@ -48,6 +47,12 @@ void add_muon(const char* path, const char* fault = "") {
   }
   arm->Write();
   file.Close();
+}
+
+void remove_muon(const char* path) {
+  TFile file(path, "UPDATE");
+  file.cd("Event/Rec");
+  gDirectory->Delete("ARMuon;*");
 }
 
 void add_unused_ad_trees(const char* path) {
@@ -124,9 +129,9 @@ void compare_muon(const char* result, const char* first, const char* second, boo
   }
 }
 
-void check_pool_boundaries(const char* muon_path, const char* mini_path) {
-  for (const char* path : {muon_path, mini_path}) {
-    const bool muon = path == muon_path;
+void check_pool_boundaries(const char* selected_path, const char* unfiltered_path) {
+  for (const char* path : {selected_path, unfiltered_path}) {
+    const bool selected = path == selected_path;
     TFile file(path);
     auto* ad = file.Get<TTree>("Event/Rec/AdSimpleNL");
     auto* stats = file.Get<TTree>("Event/Data/CalibStats");
@@ -136,7 +141,7 @@ void check_pool_boundaries(const char* muon_path, const char* mini_path) {
       const auto detector = ad->GetLeaf("detector")->GetValueLong64();
       const auto hits = stats->GetLeaf("nHit")->GetValueLong64();
       if (detector == 5 || detector == 6) {
-        if (muon) assert(hits > 5);
+        if (selected) assert(hits > 5);
         if (hits == 5) ++pool_five;
         if (hits == 6) ++pool_six;
       }
@@ -144,7 +149,7 @@ void check_pool_boundaries(const char* muon_path, const char* mini_path) {
       if (detector == 7 && hits <= 5) ++low_hit_rpc;
     }
     assert(pool_six > 0 && low_hit_ad > 0 && low_hit_rpc > 0);
-    assert(muon ? pool_five == 0 : pool_five > 0);
+    assert(selected ? pool_five == 0 : pool_five > 0);
   }
 }
 

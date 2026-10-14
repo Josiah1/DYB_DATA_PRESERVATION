@@ -12,7 +12,7 @@ const std::vector<std::string> kMuonFields = {
 TTree* require_muon_tree(TFile& file, bool output = false) {
   const std::string path = "Event/Rec/ARMuon";
   auto* tree = dynamic_cast<TTree*>(file.Get(path.c_str()));
-  if (!tree) throw std::runtime_error("muon mode requires tree: " + path);
+  if (!tree) throw std::runtime_error("missing required tree: " + path);
   for (const auto& original : kMuonFields) {
     const auto name = output ? "arm_" + original : original;
     auto* branch = tree->GetBranch(name.c_str());
@@ -20,7 +20,7 @@ TTree* require_muon_tree(TFile& file, bool output = false) {
     if (!branch || !leaf || branch->GetListOfLeaves()->GetEntries() != 1 ||
         leaf->GetLeafCount() || leaf->GetLenStatic() != 1 ||
         std::string(leaf->GetTypeName()) == "Char_t")
-      throw std::runtime_error("muon mode requires a scalar numeric branch: " + path + "/" + name);
+      throw std::runtime_error("required scalar numeric branch: " + path + "/" + name);
   }
   return tree;
 }
@@ -83,17 +83,15 @@ void copy_muon_tree(TTree* input, TTree*& output, TDirectory* rec_dir,
   for (source_entry = 0; source_entry < input->GetEntries(); ++source_entry) {
     if (input->GetEntry(source_entry) <= 0)
       throw std::runtime_error("cannot read muon entry");
-    if (aligned_ad) {
-      if (aligned_ad->GetEntry(source_entry) <= 0)
-        throw std::runtime_error("cannot read AD entry for muon selection");
-      // Check even discarded rows: a mask is valid only for the same input events.
-      for (const auto& name : kMuonEventFields)
-        if (aligned_ad->GetLeaf(name.c_str())->GetValueLong64() !=
-            input->GetLeaf(name.c_str())->GetValueLong64())
-          throw std::runtime_error("muon selection requires aligned event rows at source entry " +
-                                   std::to_string(source_entry) + " field " + name);
-      if (!keep[source_entry]) continue;
-    }
+    if (aligned_ad->GetEntry(source_entry) <= 0)
+      throw std::runtime_error("cannot read AD entry for alignment check");
+    // Check even discarded rows: a mask is valid only for the same input events.
+    for (const auto& name : kMuonEventFields)
+      if (aligned_ad->GetLeaf(name.c_str())->GetValueLong64() !=
+          input->GetLeaf(name.c_str())->GetValueLong64())
+        throw std::runtime_error("conversion requires aligned event rows at source entry " +
+                                 std::to_string(source_entry) + " field " + name);
+    if (!keep[source_entry]) continue;
     if (output->Fill() < 0)
       throw std::runtime_error("cannot copy muon entry in " + std::string(input->GetName()));
   }
@@ -119,16 +117,14 @@ void verify_muon(TFile& file, TTree* sources, TTree* ad, bool selected) {
   bind(tree, "runNumber", &run);
   bind(tree, "sourceIndex", &source_index);
   bind(tree, "sourceEntry", &source_entry);
-  if (selected) {
-    if (tree->GetEntries() != ad->GetEntries())
-      throw std::runtime_error("selected muon and AD entry counts differ");
-    for (const auto& name : kMuonEventFields) ad->SetBranchStatus(name.c_str(), true);
-  }
+  if (tree->GetEntries() != ad->GetEntries())
+    throw std::runtime_error("ARMuon and AD entry counts differ");
+  for (const auto& name : kMuonEventFields) ad->SetBranchStatus(name.c_str(), true);
   for (Long64_t s = 0; s < sources->GetEntries(); ++s) {
     if (sources->GetEntry(s) <= 0) throw std::runtime_error("cannot read muon provenance");
-    const Long64_t output_count = selected ? kept_entries : count;
+    const Long64_t output_count = kept_entries;
     if (count < 0 || output_count < 0 || output_count > count ||
-        output_count > tree->GetEntries() - total || (selected && count != input_entries))
+        output_count > tree->GetEntries() - total || count != input_entries)
       throw std::runtime_error("invalid muon source entry count");
     Long64_t previous_entry = -1;
     for (Long64_t e = 0; e < output_count; ++e) {
@@ -136,13 +132,11 @@ void verify_muon(TFile& file, TTree* sources, TTree* ad, bool selected) {
           source_entry <= previous_entry || source_entry >= count || (!selected && source_entry != e))
         throw std::runtime_error("invalid muon entry provenance");
       previous_entry = source_entry;
-      if (selected) {
-        if (ad->GetEntry(total + e) <= 0) throw std::runtime_error("cannot read aligned output AD entry");
-        for (const auto& name : kMuonEventFields)
-          if (ad->GetLeaf(name.c_str())->GetValueLong64() !=
-              tree->GetLeaf(("arm_" + name).c_str())->GetValueLong64())
-            throw std::runtime_error("selected muon and AD event identities differ");
-      }
+      if (ad->GetEntry(total + e) <= 0) throw std::runtime_error("cannot read aligned output AD entry");
+      for (const auto& name : kMuonEventFields)
+        if (ad->GetLeaf(name.c_str())->GetValueLong64() !=
+            tree->GetLeaf(("arm_" + name).c_str())->GetValueLong64())
+          throw std::runtime_error("ARMuon and AD event identities differ");
     }
     total += output_count;
   }

@@ -5,19 +5,17 @@ ROOT files using Zstandard (ZSTD) compression at level 9. It preserves the store
 values and writes source-file provenance. It runs on one CPU and does not need
 a GPU, a batch scheduler, or the NuWa runtime for the retained scalar branches.
 
-Two profiles are available for antineutrino detector (AD) and muon analyses:
-
-| Profile | Required input | Event retention |
-| --- | --- | --- |
-| `mini` (default) | `AdSimpleNL` and `CalibStats` | All entries by default; optional AD energy > 0.6 MeV and pool nHit > 5 cuts |
-| `muon` | `AdSimpleNL`, `CalibStats`, and `ARMuon` | Same optional cuts, applied to all three aligned trees |
+Every conversion requires and stores three aligned event trees:
+`AdSimpleNL`, `CalibStats`, and `ARMuon`. There is no profile option.
+All entries are retained by default. Optional AD energy > 0.6 MeV and pool
+nHit > 5 cuts keep or remove the same original rows in all three trees.
 
 AD energy, position, and event metadata all come from `AdSimpleNL`, as in the
 base converter. `AdSimple`, `AdScaled`, and `AdScaledNL` are neither required
-nor stored. Muon mode adds the `ARMuon` fields described in the
+nor stored. The `ARMuon` fields are described in the
 [muon-analysis guide](docs/muon.md). A mini file without `ARMuon` cannot supply
-that information; use an original reconstruction file containing it. Muon
-mode stops if a required tree or field is absent.
+that information; use an input file containing all three trees. Conversion
+stops if a required tree or field is absent.
 
 ## Build and test
 
@@ -48,8 +46,8 @@ make test PYTHON=/path/to/python3
 
 The tests generate small files in a temporary directory and remove them after
 use. They check event selection, values and types in all added muon fields,
-multiple input files, independent `ARMuon` ordering with selection off,
-shared selection of aligned trees, rejection of mismatched event rows, failure cleanup, and
+multiple input files, shared selection of aligned trees, rejection of mismatched
+event rows with cuts on or off, failure cleanup, and
 refusal to overwrite existing outputs. Conflicting values in unused AD
 reconstruction trees are checked to have no effect on the output.
 
@@ -74,7 +72,7 @@ bin/slim-root \
   --output output/run21221.root \
   --source-report output/run21221.sources.tsv \
   --run-number 21221 \
-  --profile muon
+  --ad-selection on
 
 bin/slim-root --verify output/run21221.root
 ```
@@ -83,8 +81,7 @@ bin/slim-root --verify output/run21221.root
 converter does not infer it from filenames or check it against a run header.
 Check the input list before starting.
 
-For mini files, use `--profile mini`. In both profiles, `--ad-selection on`
-enables these detector-specific cuts:
+`--ad-selection on` enables these detector-specific cuts:
 
 - ADs (detector 1–4): keep raw `AdSimpleNL.energy > 0.6 MeV`; discard values
   at or below the threshold and NaN.
@@ -92,8 +89,8 @@ enables these detector-specific cuts:
   discard values at or below 5, regardless of energy.
 - Other detectors, including RPC (7): keep every entry.
 
-Muon mode requires equal input row counts and matching AD/ARMuon event
-identifiers at every row, then applies the combined mask to all three trees.
+The converter always requires equal input row counts and matching AD/ARMuon
+event identifiers at every row, then applies one mask to all three trees.
 The decision uses `AdSimpleNL.energy` and `CalibStats.nHit`, never
 `ARMuon.energy`. The default `--ad-selection off` retains all entries.
 The selected sample includes all AD events above 20 MeV and all pool events
@@ -114,14 +111,13 @@ the converter does not silently skip files or remove originals.
 ```text
 Event/
   Rec/
-    AdSimpleNL       # both profiles
-    ARMuon           # muon profile
+    AdSimpleNL
+    ARMuon
   Data/
-    CalibStats       # both profiles
+    CalibStats
 Preservation/
   Sources
   selection
-  profile
   converterVersion
 ```
 
@@ -144,15 +140,12 @@ for `site` and `detector`, `UInt_t` for trigger number and type, `Int_t` for
 trigger timestamps and reconstruction status, and `Float_t` for reconstruction
 values and quality. Conversion rejects other types rather than casting them.
 
-`AdSimpleNL` and `CalibStats` use the same retained row order. Their input
-entry counts must agree; the input format must already pair calibration and
-reconstruction entries.
-Original reconstruction files are expected to align `ARMuon` with those
-trees. With selection off, each tree is copied in its original order without
-enforcing equal counts or matching event identifiers for `ARMuon`. With
-selection on, muon mode checks AD/ARMuon alignment, including rows that will
-be discarded, and retains the same rows in all three trees. See the guide
-for the event keys and provenance fields.
+All three event trees use the same retained row order. Input entry counts
+must agree, and the six AD/ARMuon event identifiers must match at every row,
+including rows that will be discarded. These checks also apply with selection
+off. CalibStats has no event identifiers, so the input format must already
+pair its rows with AdSimpleNL; conversion preserves that pairing. See the
+guide for the event keys and provenance fields.
 
 ## Provenance and verification
 
@@ -161,21 +154,21 @@ for the event keys and provenance fields.
 | Field | Meaning |
 | --- | --- |
 | `path` | Input path as listed |
-| `firstEntry`, `entries`, `keptEntries` | Starting output row in the base trees, input row count, retained row count |
+| `firstEntry`, `entries`, `keptEntries` | Starting output row in all three trees, input row count, retained row count |
 | `inputBytes` | Input file size |
 | `firstTriggerTimeSec`, `firstTriggerTimeNanoSec`, `lastTriggerTimeSec`, `lastTriggerTimeNanoSec` | Minimum and maximum source trigger times, including entries removed by the optional cut |
 | `dataDurationSeconds` | Difference between those two trigger times |
 | `processingWallSeconds`, `processingCpuSeconds` | Time spent converting that source |
 | `adBelow0p3MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` at or below 0.3 MeV, including NaN |
 | `adFrom0p3To0p6MeV[4]` | Counts per AD with raw `AdSimpleNL.energy` above 0.3 and at or below 0.6 MeV |
-| `muonEntries` | Muon mode only: number of `ARMuon` entries in this source (`Long64_t`) |
+| `muonEntries` | Number of input `ARMuon` entries (`Long64_t`), required to equal `entries` |
 | `poolAtMost5Hits[2]` | Input counts with `nHit <= 5`, in IWS (5), OWS (6) order; removed when selection is on |
 
-The tab-separated (TSV) report contains the base-tree counts, timing, byte size, and per-AD
+The tab-separated (TSV) report contains the shared row counts, timing, byte size, and per-AD
 energy-bin counts. The extra `muonEntries` counts are stored in the ROOT
 provenance tree. The bin counts are written even when selection is off.
 The TSV columns `iwsAtMost5Hits` and `owsAtMost5Hits` contain the pool counts.
-For selected v10 output, `entries = keptEntries + sum(adBelow0p3MeV) +
+For selected output, `entries = keptEntries + sum(adBelow0p3MeV) +
 sum(adFrom0p3To0p6MeV) + sum(poolAtMost5Hits)` for each source.
 With selection on, `muonEntries` remains the original input count; the retained
 ARMuon count is `keptEntries`. Its `sourceEntry` values keep their original
@@ -190,8 +183,8 @@ ROOT file. Remove leftovers only after checking that no process is writing
 them. A report alone does not establish successful conversion.
 
 `--verify` checks the schema, source accounting, timing, selected AD energies and pool hit counts,
-and muon stream counts and row provenance. For selected muon output it also
-checks equal tree counts and matching AD/ARMuon event identities. It does not compare every output
+and row provenance. It always checks equal tree counts and matching AD/ARMuon
+event identities. It does not compare every output
 value against the original files, verify a good-run list, or prove the input
 catalog complete. Keep the original input list and source data until your
 analysis validation is complete. Older converter versions have a different
@@ -201,12 +194,13 @@ metadata contract and should be verified with their corresponding executable.
 
 | Error | Action |
 | --- | --- |
-| `muon mode requires tree` or `scalar numeric branch` | Inspect the input with ROOT; use an original reconstruction file containing the named tree and field |
+| `missing required tree` or `scalar numeric branch` | Inspect the input with ROOT; use a file containing all three trees and the named field |
 | `tree entry mismatch` | Inspect the source file for incomplete or mismatched reconstruction/calibration trees |
-| `muon selection requires aligned` | Check the AD/ARMuon counts and event identifiers; a shared row cut cannot be applied to different event streams |
+| `conversion requires aligned` | Check the AD/ARMuon counts and event identifiers; all three trees must describe the same rows, even with cuts off |
+| `unknown or incomplete argument: --profile` | Remove the old option; all three trees are always included |
 | `refusing to overwrite` | Choose new output names or inspect and remove only an unwanted previous result |
 | `cannot atomically publish` | Check permissions, free space, hard-link support, and whether another process created the destination |
 
-Output size depends on the profile and input data. Start with a small input
+Output size depends on the input data and selection. Start with a small input
 list before allocating storage for a full run. Each listed file is processed
 in sequence; no intermediate copy of the input data is made.
