@@ -120,8 +120,8 @@ The event trees contain these branches:
 
 `ARMuon` also has `runNumber` (`Int_t`), `sourceIndex`
 (`Long64_t`, zero based), and `sourceEntry` (`Long64_t`, zero based). These
-identify the source row without assuming that `ARMuon` is an aligned friend
-of `AdSimpleNL`. These three added provenance names have no prefix. Original
+identify the original source row. These three added provenance names have no
+prefix. Original
 `ARMuon` fields are written as `arm_site`, `arm_energy`, and so on; input
 branch names remain unchanged. The expected scalar types in `ARMuon`,
 using original field names below, are `Short_t`
@@ -132,8 +132,11 @@ values and quality. Conversion rejects other types rather than casting them.
 `AdSimpleNL` and `CalibStats` use the same retained row order. Their input
 entry counts must agree; the input format must already pair calibration and
 reconstruction entries.
-`ARMuon` is copied in its own order, with no requirement that its count equal
-the AD count. See the guide before joining it to calibration data.
+Original reconstruction files are expected to align `ARMuon` with those
+trees. Muon mode retains all rows of all three trees in input order, preserving
+that alignment. It does not enforce equal counts or event identifiers for
+`ARMuon`; see the guide for checking unfamiliar inputs. The optional 0.6 MeV
+cut is supported only by mini mode, which does not write `ARMuon`.
 
 ## Provenance and verification
 

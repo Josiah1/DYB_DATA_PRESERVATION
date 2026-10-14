@@ -91,8 +91,17 @@ analysis.
 
 ## Matching ARMuon to other trees
 
-Do not assume that `ARMuon` row `i` describes AD row `i`. Its source may contain
-a separate or differently ordered stream. Match these `AdSimpleNL` fields
+In the original reconstruction format, `AdSimpleNL`, `CalibStats`, and
+`ARMuon` are expected to describe the same events in the same row order.
+Muon mode retains every row of all three trees, preserving that alignment
+when it is present in each input file. It requires `--ad-selection off`.
+Applying the 0.6 MeV cut to only the AD/calibration trees would break their
+row correspondence with an unfiltered `ARMuon`; filtering all three would
+require the same event mask.
+
+The converter preserves each tree's input order but does not enforce matching
+event identifiers or equal counts for `ARMuon`. For an unfamiliar or modified
+input, verify alignment by comparing these `AdSimpleNL` fields row by row
 within the same source file:
 
 ```text
@@ -113,7 +122,8 @@ row's zero-based index is the corresponding source index.
 After finding the matching AD row, read `CalibStats` at that AD row to obtain `nHit`. Require one
 matching row; report absent or ambiguous matches instead of taking a nearby
 timestamp. `sourceEntry` records a row's original position in its own tree
-and is not an event key across different trees.
+and is a shared row index only when the input trees are aligned. If the event
+keys differ at the same row, use the keys to join the trees instead.
 
 `sourceIndex` starts at zero for each output file. Across several converted
 files, include the output-file identity or resolve it through
