@@ -929,3 +929,8 @@ with zero missing/broken omissions and zero new gaps. Portable original proof
 is `provenance/worker-recovery-run22262-EH2.json`; the small ignored current
 checkpoint is `build/oct14-22262-recovery-result.json`. Production code and
 all existing guards remain unchanged; the deeper SIGBUS cause is unconfirmed.
+
+run22262 reached 11/11 verified chunks at 15:59:21 UTC. All 45 old-good
+fingerprints were unchanged, and both recoveries recorded zero new input
+gaps. The resumed controller subsequently reverified run65318 before staging
+cleanup, admitted run22269 and continued the run65333 portable transfer.
