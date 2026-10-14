@@ -871,3 +871,34 @@ current retry outcome, fingerprints, controller, transfer and monitoring
 evidence is the small ignored `build/oct14-21952-recovery-result.json`.
 No source, worker, converter, schema, selection, scheduler configuration or
 attempt-limit change was made.
+
+### Fourth scheduled recovery: EH2/run22131
+
+The 15:26 UTC check detected three converter SIGBUS failures in chunks 5–7
+of P17B/EH2/run22131, original cluster 82241372. All three were on lhws304
+at 15:24 UTC inside ROOT `TStreamerInfoActions::WriteBasicType<float>` while
+writing metadata. Their stdout and converter reports were empty. This is
+not a proved missing or broken mini, and the strict startup classifier
+continues to reject it. The underlying cause remains unconfirmed.
+
+The existing run65305 transfer was allowed to finish and publish before the
+failed controller exited; no transfer was interrupted. Fresh successful
+global queries established that all five remaining original writers had
+exited, leaving seven good chunks, three failures and no unresolved intents.
+The fixed 150-input catalog still accounts for 149 processed minis and one
+previously confirmed missing mini, with zero new input gaps. All 48 affected
+mini headers, exact chunk identities, deployed source/worker hashes and
+quota guards passed. The configured LCG runtime independently verified a
+good output with 12,287,812 retained entries from 13,903,610 source entries.
+
+Before retry, the original logs, failure markers, receipts, catalog/source
+identities, six partial-file records and all 35 fingerprints covering the
+seven good chunks were saved in the remote run's `worker-recovery.json` and
+portable `provenance/worker-recovery-run22131-EH2.json`. Under the submission
+lock, another fresh writer/intent check allowed the authorized second and
+last attempt, cluster 82242347 at 15:35:43 UTC. No third attempt is authorized
+by this recovery. The single existing service was restarted with unchanged
+production code; live retry, preservation, transfer, controller and monitor
+results are in the small ignored `build/oct14-22131-recovery-result.json`.
+No source, worker, converter, schema, selection, shared site configuration,
+staging budget or attempt-limit change was made.
