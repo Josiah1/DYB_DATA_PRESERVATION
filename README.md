@@ -21,10 +21,10 @@ mode stops if a required tree or field is absent.
 
 ## Build and test
 
-To check out this branch, replace `REPOSITORY_URL` with its Git repository URL:
+To check out the standalone converter branch:
 
 ```sh
-git clone --single-branch --branch converter-share REPOSITORY_URL dyb-converter
+git clone --single-branch --branch converter-share https://github.com/Josiah1/DYB_DATA_PRESERVATION.git dyb-converter
 cd dyb-converter
 ```
 
