@@ -100,7 +100,7 @@ mini productions, which may have different branch content.
 ## Output format
 
 ROOT with **ZSTD level 9 and 256 KiB branch baskets** is the default
-(`dyb-slim-v5`, schema 4). Automatic basket-size adaptation and autosave are disabled;
+(`dyb-slim-v5.1`, schema 4, compatible with v5 output). Automatic basket-size adaptation and autosave are disabled;
 event baskets are flushed at each source boundary for bounded memory and
 per-source timing. The lossless codec comparison in [BENCHMARK.md](BENCHMARK.md)
 measured a smaller, slower LZMA alternative; it has not been adopted.
@@ -140,6 +140,15 @@ are taken over every trigger in the source, dropped ones included. With the
 selection off every entry is written, `keptEntries = entries`, and the two AD
 count arrays are still filled. The mode is recorded in the run marker,
 `run.json`, and every chunk; one archive must use one mode.
+
+The `main` branch retains every non-AD event, including pool entries with
+`nHit <= 5`, to stay consistent with the existing compression campaign.
+It stores only `AdSimpleNL` and `CalibStats`; it does not require or add ARMuon.
+The standalone `converter-share` branch has a different three-tree contract
+including ARMuon. Both branches retain all non-AD events without an `nHit` cut.
+The v5.1 update carries over input validation, write-error checks, safe
+publication, and support for a valid zero-row result when all AD events fail
+the cut. Selection metadata, schema 4, and source-report columns are unchanged.
 
 **Opt-in selection caveat:** this selection uses uncorrected
 `AdSimpleNL.energy`. TWin applies an energy correction before
@@ -187,6 +196,12 @@ One run is handled as one transaction:
 Failed chunks are resumable; verified chunks and timing reports are skipped.
 The external disk is checked before and after every transfer, preventing a
 silently unmounted volume from authorizing remote deletion.
+
+The converter requires distinct, new ROOT and TSV output paths. It publishes
+each file with a hard link, so a destination created by another process is
+not overwritten. The output filesystem must support hard links. Caught
+errors remove partial files; a forced process kill can leave partial files
+or a TSV without a published ROOT file.
 
 The October 11 user decision releases the seven empty-mini content holds using
 `--skip-broken-minis`. Every failed chunk must first have the exact recognized

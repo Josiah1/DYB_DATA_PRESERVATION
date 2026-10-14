@@ -25,7 +25,7 @@
 namespace {
 constexpr int kCompressionSettings = 509;  // ROOT ZSTD level 9.
 constexpr int kBasketBytes = 256 * 1024;
-constexpr const char* kVersion = "dyb-slim-v5";
+constexpr const char* kVersion = "dyb-slim-v5.1";
 constexpr int kAdCount = 4;              // AD detector codes 1-4.
 constexpr double kAdMinEnergyMeV = 0.6;  // Lowest tested cut that fits the disk with reserve.
 constexpr double kAdBandLowMeV = 0.3;    // Dropped AD entries are counted as <= 0.3 or (0.3, 0.6].
@@ -84,6 +84,8 @@ std::vector<std::string> read_inputs(const std::string& path) {
   while (std::getline(stream, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty()) continue;
+    if (line.find('\t') != std::string::npos)
+      throw std::runtime_error("input path contains a tab and cannot be written to TSV");
     if (line.front() != '/') throw std::runtime_error("input path is not absolute: " + line);
     if (!seen.insert(line).second) throw std::runtime_error("duplicate input path: " + line);
     inputs.push_back(line);
@@ -115,7 +117,7 @@ long long verify_file(const std::string& path) {
   require_branches(ad, kAdBranches);
   require_branches(calib, kCalibBranches);
   require_branches(sources, kSourceBranches);
-  if (ad->GetEntries() <= 0 || ad->GetEntries() != calib->GetEntries())
+  if (ad->GetEntries() != calib->GetEntries())
     throw std::runtime_error("output entry counts are invalid: " + path);
   if (sources->GetEntries() <= 0) throw std::runtime_error("source manifest is empty: " + path);
   auto* selection = dynamic_cast<TNamed*>(file.Get("Preservation/selection"));
@@ -192,6 +194,8 @@ void convert(const std::string& input_list, const std::string& output_path,
     throw std::runtime_error("refusing to overwrite output or source report");
   const std::filesystem::path output(output_path);
   const std::filesystem::path source_report(source_report_path);
+  if (std::filesystem::weakly_canonical(output) == std::filesystem::weakly_canonical(source_report))
+    throw std::runtime_error("output and source report must be different paths");
   if (output.parent_path().empty() || !std::filesystem::is_directory(output.parent_path()))
     throw std::runtime_error("output directory does not exist: " + output.parent_path().string());
   if (source_report.parent_path().empty() ||
@@ -350,12 +354,12 @@ void convert(const std::string& input_list, const std::string& output_path,
           if (selection_class == 2) ++ad_band[detector - 1];
           if (enabled && selection_class != 0) continue;
         }
-        ad.Fill();
-        calib.Fill();
+        if (ad.Fill() < 0 || calib.Fill() < 0)
+          throw std::runtime_error("cannot write output event");
         ++kept_entries;
       }
-      ad.FlushBaskets();
-      calib.FlushBaskets();
+      if (ad.FlushBaskets() < 0 || calib.FlushBaskets() < 0)
+        throw std::runtime_error("cannot flush output events");
       input_file.Close();
 
       if (source_entries > 0) {
@@ -371,7 +375,7 @@ void convert(const std::string& input_list, const std::string& output_path,
       processing_wall_seconds = std::chrono::duration<double>(
           std::chrono::steady_clock::now() - source_wall_start).count();
       processing_cpu_seconds = cpu_seconds() - source_cpu_start;
-      sources.Fill();
+      if (sources.Fill() < 0) throw std::runtime_error("cannot write source provenance");
       source_report << source_index << '\t' << source_path << '\t' << source_entries << '\t'
                     << source_bytes << '\t' << first_trigger_sec << '\t' << first_trigger_nano
                     << '\t' << last_trigger_sec << '\t' << last_trigger_nano << '\t'
@@ -385,23 +389,26 @@ void convert(const std::string& input_list, const std::string& output_path,
     }
 
     rec_dir->cd();
-    ad.Write();
+    if (ad.Write() <= 0) throw std::runtime_error("cannot write AD tree");
     data_dir->cd();
-    calib.Write();
+    if (calib.Write() <= 0) throw std::runtime_error("cannot write CalibStats tree");
     preservation_dir->cd();
-    sources.Write();
+    if (sources.Write() <= 0) throw std::runtime_error("cannot write source tree");
     TNamed selection("selection", enabled ? kSelectionOn : kSelectionOff);
-    selection.Write();
+    if (selection.Write() <= 0 || output_file.TestBit(TFile::kWriteError))
+      throw std::runtime_error("cannot finish output metadata");
     output_file.Close();
     source_report.close();
     if (!source_report) throw std::runtime_error("cannot finish source report: " + partial_report);
     verify_file(partial);
-    if (std::rename(partial_report.c_str(), source_report_path.c_str()) != 0)
+    if (::link(partial_report.c_str(), source_report_path.c_str()) != 0)
       throw std::runtime_error("cannot atomically publish source report: " + source_report_path);
-    if (std::rename(partial.c_str(), output_path.c_str()) != 0) {
+    std::remove(partial_report.c_str());
+    if (::link(partial.c_str(), output_path.c_str()) != 0) {
       std::remove(source_report_path.c_str());
       throw std::runtime_error("cannot atomically publish output: " + output_path);
     }
+    std::remove(partial.c_str());
   } catch (...) {
     std::remove(partial.c_str());
     std::remove(partial_report.c_str());
@@ -430,6 +437,16 @@ int main(int argc, char** argv) {
       verify_file(argv[2]);
       return 0;
     }
+    const std::string usage =
+        "usage: slim-root --input-list FILE --output FILE --source-report FILE "
+        "--run-number NUMBER [--ad-selection on|off]\n"
+        "       slim-root --verify FILE | --version | --help\n"
+        "Stores aligned AdSimpleNL and CalibStats trees. With --ad-selection on, "
+        "AD detectors 1-4 require energy > 0.6 MeV; all non-AD events are kept without an nHit cut.";
+    if (argc == 2 && std::string(argv[1]) == "--help") {
+      std::cout << usage << '\n';
+      return 0;
+    }
     std::string input_list, output, source_report, selection = "off";
     int run_number = -1;
     for (int i = 1; i < argc; ++i) {
@@ -437,15 +454,18 @@ int main(int argc, char** argv) {
       if (arg == "--input-list" && i + 1 < argc) input_list = argv[++i];
       else if (arg == "--output" && i + 1 < argc) output = argv[++i];
       else if (arg == "--source-report" && i + 1 < argc) source_report = argv[++i];
-      else if (arg == "--run-number" && i + 1 < argc) run_number = std::stoi(argv[++i]);
+      else if (arg == "--run-number" && i + 1 < argc) {
+        const std::string value = argv[++i];
+        if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos)
+          throw std::runtime_error("run number must be a nonnegative integer");
+        run_number = std::stoi(value);
+      }
       else if (arg == "--ad-selection" && i + 1 < argc) selection = argv[++i];
       else throw std::runtime_error("unknown or incomplete argument: " + arg);
     }
     if (input_list.empty() || output.empty() || source_report.empty() || run_number < 0 ||
         (selection != "on" && selection != "off"))
-      throw std::runtime_error(
-          "usage: slim-root --input-list FILE --output FILE --source-report FILE "
-          "--run-number NUMBER [--ad-selection on|off]");
+      throw std::runtime_error(usage);
     convert(input_list, output, source_report, run_number, selection == "on");
     return 0;
   } catch (const std::exception& error) {
