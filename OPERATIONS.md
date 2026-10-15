@@ -1049,3 +1049,40 @@ unchanged. Original proof is portable
 queue and monitoring evidence is the small ignored
 `build/oct15-26089-recovery-result.json`. Hourly and five-minute monitoring
 remain enabled.
+
+## 2026-10-15 01:00 UTC run34533 guarded SIGBUS recovery
+
+The hourly check found the controller stopped at P17B/EH2/run34533. Chunk
+13 of cluster 82272859 exited 135 on lhws215 at 00:44:09 UTC. ROOT reported
+SIGBUS, but its CVMFS backtrace script was unavailable; the conversion report
+and stdout were empty, with a 215,343,996-byte ROOT partial and a source-report
+partial retained. The deeper fault is unconfirmed. Neither SIGBUS nor the
+absent backtrace script is missing/broken-mini evidence, and the strict
+automatic classifiers remain unchanged.
+
+Fresh global queries under the submission lock proved no run writers,
+running markers or unresolved intent and exactly one previous attempt. The
+two unrelated scheduler jobs were retained. Fixed catalog/chunk identities,
+all 16 affected mini headers, pinned code/worker/converter, quota and the
+300-job/400-GiB guards passed. A good chunk independently verified under the
+configured LCG runtime, with counts matching its source report. Original
+failure/stdout/report, sources, receipt, two partial-file fingerprints and
+90 fingerprints of eighteen good chunks were saved before the authorized
+diagnostic second attempt, cluster 82272942 at 01:04:25 UTC.
+
+Worker lhws078 completed chunk 13 at 01:10:16 UTC: 9,914,912 retained events
+from 12,180,499 events across 16 sources; both ROOT verification steps passed
+with blank stderr. At 01:11:12 UTC all 19 chunks were verified, with no run
+jobs or intent. All 90 earlier good fingerprints and both original partial
+fingerprints were unchanged. The fixed catalog remains 305 expected inputs,
+302 processed and three earlier confirmed missing minis, with no broken
+inputs or new gaps. Retry success does not identify the original crash's
+cause.
+
+Only the existing guarded retry and single-controller restart were used;
+production code, classifiers, physics, schema, runtime and site setup were
+unchanged. Original proof is portable
+`provenance/worker-recovery-run34533-EH2.json`; current controller, transfer,
+queue, retained-run and monitoring evidence is the small ignored
+`build/oct15-34533-recovery-result.json`. Hourly and five-minute monitoring
+remain enabled.
