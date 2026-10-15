@@ -25,11 +25,36 @@ array with no jobs in a successful global scheduler query uses the existing
 bounded retry (two submissions maximum), rather than stopping forever on the
 old submission timestamp. The submission helper independently rechecks that
 no jobs remain before retrying; workers reopen and verify completed chunks,
-then reuse them. Exhausted attempts and held jobs still stop safely; the known
+then reuse them. Failed exhausted attempts and held jobs still stop safely; the known
 scheduler transport outages described below pause and retry automatically.
 This is job recovery, never a missing-mini skip;
 catalogs, gaps and verified outputs stay intact. The scheduler class and its
 30-minute limit are unchanged.
+
+Since October 15, an expired `PENDING` array whose attempts are exhausted can
+remain explicitly pending while unrelated transfers and admissions continue.
+This exception requires a successful fresh global queue query, no run jobs,
+no worker or failure markers, and no unresolved submission intent. The
+controller records `exhausted_pending_runs` with the fixed catalog hash,
+attempt count, and verified/expected chunk counts; the five-minute monitor
+warns until the run is resolved. It never submits a third attempt, finalizes
+an incomplete run, adds an input gap, deletes its staging, resets its clock,
+or treats missing worker evidence as a source-file classification. Failed or
+uncertain work retains the existing fatal checks.
+
+The triggering run was `P17B/EH2/run40642`, catalog SHA256
+`5ba2c8e8696cc8a5348dcf90c7a8e842847fa5567ce731a3ceb48fec47e11d8f`.
+At 23:00 UTC it had 15/20 good chunks, two receipts (`82320326` at 18:01
+and `82322559` at 20:01), no queue jobs, intents, running/failure markers,
+or worker evidence for chunks 13, 15, 16, 17, and 18. Its full 307-input
+catalog, 305 prepared usable minis, two existing ENOENT gaps, 15 good chunks,
+and receipts are retained. Absent worker evidence alone does not establish
+why those five tasks failed to complete. The new regression places this
+exhausted run before a COMPLETE run, proves verification before cleanup and
+unaffected admission across repeated queries, forbids a third attempt, and
+checks that the pending warning clears only after completion. It also keeps
+failed/worker-marker/uncertain-intent cases fatal and preserves the strict
+startup-only recovery behavior.
 
 Since the October 11 run54964 recovery, an expired wait deadline with live jobs
 leaves that run pending and its writers untouched, while other verified transfers

@@ -2274,16 +2274,25 @@ def run_pipeline(args, selected, snapshot, local_root):
 
                     pending = [r for key, r in expected.items() if key not in done and key not in active]
                     overdue = []
+                    exhausted_pending = {}
                     for key, run in active.items():
                         own = [j for j in pool["jobs"] if j["Iwd"] == run["marker"]["run_dir"]]
-                        if key not in held and own and run["submissions"]:
+                        if key not in held and run["submissions"]:
                             submitted_at = run["submissions"][-1]["submitted_at"]
                             elapsed = time.time() - dt.datetime.fromisoformat(submitted_at).timestamp()
-                            if elapsed > args.run_timeout:
+                            if elapsed > args.run_timeout and own:
                                 overdue.append(dict(run=key, catalog_sha256=run["marker"]["catalog_sha256"],
                                     submitted_at=submitted_at, elapsed_seconds=int(elapsed),
                                     jobs=[dict(cluster_id=j["ClusterId"], proc_id=j["ProcId"],
                                                state=j["JobStatus"]) for j in own]))
+                            attempts = len(run["submissions"]) - run["marker"].get("broken_recovery_submissions", 0)
+                            if (elapsed > args.run_timeout and not own and not run["intent"] and
+                                    run["status"]["state"] == "PENDING" and not run["status"]["running"] and
+                                    not run["status"]["failed"] and attempts >= args.max_attempts):
+                                exhausted_pending[key] = dict(run=key, catalog_sha256=run["marker"]["catalog_sha256"],
+                                    submitted_at=submitted_at, attempts=attempts, max_attempts=args.max_attempts,
+                                    chunks=run["marker"]["chunk_count"], verified_chunks=run["status"].get("ok", 0),
+                                    reason="incomplete array exhausted attempts; staging and expected inputs retained")
                     report.update(checked_at=utc_now(), heartbeat_time=time.time(), queue=pool["queue"],
                                   quota=pool["quota"], reserved_bytes=pool["reserved_bytes"],
                                   output_bytes=pool["output_bytes"], staged_runs=len(active),
@@ -2293,6 +2302,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                                   new_run_admission=not args.drain_staging,
                                   skip_broken_minis=args.skip_broken_minis,
                                   overdue_runs=overdue,
+                                  exhausted_pending_runs=list(exhausted_pending.values()),
                                   pending_content_checks=sorted(rechecking),
                                   startup_recovery_pending=list(startup_pending.values()),
                                   held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
@@ -2309,6 +2319,8 @@ def run_pipeline(args, selected, snapshot, local_root):
                         own = [j for j in pool["jobs"] if j["Iwd"] == marker["run_dir"]]
                         if key in rechecking:
                             continue
+                        if key in exhausted_pending:
+                            continue  # No third attempt or cleanup; unrelated verified work can continue.
                         if key in held:
                             if key in explicit_holds and (own or status["running"]):
                                 raise RuntimeError("held run still has scheduler jobs or worker markers: " + key)

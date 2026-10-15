@@ -11,6 +11,22 @@ from scripts.check_campaign import status_record
 
 
 class CampaignMonitorTests(unittest.TestCase):
+    def test_exhausted_incomplete_array_warns_without_gaps_or_hiding_fatal_errors(self):
+        progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=307, skipped_inputs=0)
+        service = dict(ActiveState='active', InvocationID='one')
+        controller = dict(heartbeat_time=100, max_jobs=300, max_staged_bytes=400, reserved_bytes=100,
+                          queue=dict(held=0, outstanding=0), error=None,
+                          exhausted_pending_runs=[dict(run='P17B/EH2/run40642', attempts=2)])
+        report = status_record(progress, service, {}, 100, controller)
+        self.assertIsNone(report['alert'])
+        self.assertIn('exhausted attempts', report['warning'])
+        self.assertIn('run40642', report['warning'])
+        self.assertEqual((report['pending_inputs'], report['skipped_inputs'], report['complete']), (307, 0, False))
+        controller['error'] = 'checksum mismatch'
+        self.assertIn('checksum mismatch', status_record(progress, service, {}, 100, controller)['alert'])
+        controller.update(error=None, exhausted_pending_runs=[])
+        self.assertIsNone(status_record(progress, service, {}, 100, controller)['warning'])
+
     def test_startup_recovery_warning_clears_and_never_hides_fatal_errors(self):
         progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=20, skipped_inputs=2)
         service = dict(ActiveState='active', InvocationID='one')

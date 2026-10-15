@@ -50,6 +50,10 @@ def status_record(progress, service, previous, now, controller=None):
     if overdue:
         warning = (warning + "; " if warning else "") + "Overdue compression jobs retained for inspection: " + ", ".join(
             r["run"] for r in overdue)
+    exhausted = (controller or {}).get("exhausted_pending_runs", [])
+    if exhausted:
+        warning = (warning + "; " if warning else "") + "Incomplete arrays exhausted attempts; retained pending: " + ", ".join(
+            r["run"] for r in exhausted)
     startup = (controller or {}).get("startup_recovery_pending", [])
     if startup:
         warning = (warning + "; " if warning else "") + "Known worker startup faults; bounded recovery pending: " + ", ".join(

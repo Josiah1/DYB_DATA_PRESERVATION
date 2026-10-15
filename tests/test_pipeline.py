@@ -430,19 +430,22 @@ class PipelineTests(unittest.TestCase):
             marker = dict(record, run_dir='/stage/run', code_root='/code', chunk_count=1,
                           files_per_job=2000, selection=preserve.selection_record('off'),
                           input_source='mini', skip_missing_minis=True)
-            for state, queued, attempts, expired, retries, error in (
-                    ('PENDING', False, 1, True, 1, 'snapshot boundary'),
-                    ('RUNNING', False, 1, True, 1, 'snapshot boundary'),
-                    ('PENDING', False, 1, False, 0, 'snapshot boundary'),
-                    ('RUNNING', True, 1, True, 0, 'snapshot boundary'),
-                    ('PENDING', False, 2, True, 0, 'exhausted submission attempts')):
+            for state, queued, attempts, expired, intent, retries, error in (
+                    ('PENDING', False, 1, True, False, 1, 'snapshot boundary'),
+                    ('RUNNING', False, 1, True, False, 1, 'snapshot boundary'),
+                    ('PENDING', False, 1, False, False, 0, 'snapshot boundary'),
+                    ('RUNNING', True, 1, True, False, 0, 'snapshot boundary'),
+                    ('PENDING', False, 2, True, False, 0, 'snapshot boundary'),
+                    ('PENDING', False, 2, True, True, 0, 'exhausted submission attempts'),
+                    ('FAILED', False, 2, True, False, 0, 'exhausted submission attempts'),
+                    ('RUNNING', False, 2, True, False, 0, 'exhausted submission attempts')):
                 with self.subTest(state=state, queued=queued, attempts=attempts, expired=expired):
                     submissions = [dict(cluster_id=i, submitted_at=(
                         '2000-01-01T00:00:00+00:00' if expired else preserve.utc_now()))
                         for i in range(attempts)]
                     jobs = [dict(Iwd=marker['run_dir'], JobStatus=2, RequestCpus=1,
                                  ClusterId=42, ProcId=0)] if queued else []
-                    pool = dict(runs=[dict(marker=marker, submissions=submissions, intent=False,
+                    pool = dict(runs=[dict(marker=marker, submissions=submissions, intent=intent,
                                           status=dict(state=state, running=int(state == 'RUNNING'), failed=0))],
                                 jobs=jobs, queue=preserve.queue_counts(jobs), reserved_bytes=preserve.GIB,
                                 output_bytes=0, quota=dict(free_bytes=500 * preserve.GIB, used_files=10,
@@ -469,9 +472,102 @@ class PipelineTests(unittest.TestCase):
                     self.assertEqual(len(submitted), retries)
                     report = preserve.load_json(root / 'provenance/controller.json')
                     self.assertEqual(len(report.get('overdue_runs', [])), int(queued and expired))
+                    self.assertEqual(len(report.get('exhausted_pending_runs', [])),
+                                     int(state == 'PENDING' and not queued and not intent and expired and attempts == 2))
                     if queued and expired:
                         self.assertEqual(report['overdue_runs'][0]['jobs'],
                                          [dict(cluster_id=42, proc_id=0, state=2)])
+
+    def test_exhausted_pending_run_retained_while_other_run_verifies_cleans_and_admits(self):
+        records = preserve.inventory_records()[:3]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'provenance').mkdir()
+            local = root / 'data'
+            local.mkdir()
+            args = preserve.build_parser().parse_args([
+                'run', '--local-root', str(local), '--mount-root', str(root),
+                '--remote-stage-root', '/stage', '--remote-code-root', '/code',
+                '--max-jobs', '2', '--max-staged-gib', '3', '--files-per-job', '2000',
+                '--skip-missing-minis', '--delete-remote-after-sync'])
+            args.poll_seconds = 0.001
+            stages, verified, submitted = {}, set(), []
+            repaired = False
+
+            def prepare(record, state='PENDING'):
+                marker = dict(record, run_dir='/stage/' + record['stem'], code_root='/code',
+                              chunk_count=1, files_per_job=2000, selection=preserve.selection_record('off'),
+                              input_source='mini', skip_missing_minis=True)
+                stages[marker['run_dir']] = dict(marker=marker, submissions=[], intent=False,
+                    status=dict(state=state, running=0, failed=0, ok=0))
+                return marker
+
+            exhausted = prepare(records[0])  # The exhausted run precedes the ready run in every pool snapshot.
+            ready = prepare(records[1], 'COMPLETE')
+            stages[exhausted['run_dir']]['submissions'] = [
+                dict(cluster_id=i, submitted_at='2000-01-01T00:00:00+00:00') for i in (41, 42)]
+            retained = copy.deepcopy(stages[exhausted['run_dir']])
+            healthy_reports = []
+
+            def remote(alias, code, arguments):
+                nonlocal repaired
+                command = arguments[0]
+                options = dict(zip(arguments[1::2], arguments[2::2]))
+                directory = options.get('--run-dir')
+                if command == '_pool':
+                    report_path = root / 'provenance/controller.json'
+                    if report_path.exists():
+                        report = preserve.load_json(report_path)
+                        self.assertIsNone(report['error'])
+                        if report['exhausted_pending_runs']:
+                            healthy_reports.append(report)
+                    if ready['run_dir'] not in stages and submitted and not repaired:
+                        self.assertEqual(stages[exhausted['run_dir']], retained)
+                        # An external repair can later finish it; only then may the pending warning clear.
+                        for run in stages.values():
+                            run['status']['state'] = 'COMPLETE'
+                        repaired = True
+                    return copy.deepcopy(dict(runs=list(stages.values()), jobs=[],
+                        queue=preserve.queue_counts([]), reserved_bytes=len(stages) * preserve.GIB,
+                        output_bytes=0, quota=dict(free_bytes=500 * preserve.GIB, used_files=1,
+                                                 limit_files=200000))), 0
+                if command == '_prepare':
+                    self.assertEqual(stages[exhausted['run_dir']], retained)
+                    return prepare(records[2]), 0
+                if command == '_submit':
+                    self.assertNotEqual(directory, exhausted['run_dir'], 'never submit a third attempt')
+                    submitted.append(directory)
+                    stages[directory]['submissions'] = [dict(cluster_id=43, submitted_at=preserve.utc_now())]
+                    return dict(cluster_id=43), 0
+                if command == '_finalize':
+                    self.assertEqual(stages[directory]['status']['state'], 'COMPLETE')
+                    return stages[directory]['marker'], 0
+                self.assertEqual(command, '_cleanup')
+                self.assertIn(directory, verified, 'verify before cleanup')
+                if directory == ready['run_dir']:
+                    self.assertEqual(stages[exhausted['run_dir']], retained)
+                del stages[directory]
+                return dict(deleted=directory), 0
+
+            def sync(alias, marker, *unused):
+                if marker['run_dir'] == ready['run_dir']:
+                    self.assertEqual(stages[exhausted['run_dir']], retained)
+                    report = preserve.load_json(root / 'provenance/controller.json')
+                    self.assertEqual(report['exhausted_pending_runs'][0]['attempts'], 2)
+                verified.add(marker['run_dir'])
+                return dict(files=1, bytes=1, directory=marker['run_dir'])
+
+            with mock.patch('preserve.remote_json', side_effect=remote), \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                    mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues') as gaps, \
+                    mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync):
+                preserve.run_pipeline(args, records, {}, local)
+            self.assertGreaterEqual(len(healthy_reports), 2)
+            self.assertEqual(submitted, ['/stage/' + records[2]['stem']])
+            self.assertEqual(verified, {'/stage/' + r['stem'] for r in records})
+            self.assertEqual(gaps.call_args_list[0].kwargs['prepared'], exhausted)
+            self.assertEqual(exhausted['input_count'], records[0]['input_count'])
+            self.assertFalse(preserve.load_json(root / 'provenance/controller.json')['exhausted_pending_runs'])
 
     def test_overdue_job_retained_while_other_run_transfers_and_new_work_is_admitted(self):
         records = preserve.inventory_records()[:3]
