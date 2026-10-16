@@ -45,7 +45,9 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(call.call_count, 3 if command == '_pool' else 1)
         proof = dict(scheduler_unavailable=message, command='_pool', phase='read_only')
         responses = [mock.Mock(returncode=75, stdout=json.dumps(proof), stderr=''),
-                     mock.Mock(returncode=255, stdout='', stderr='ssh: Connection reset by peer')]
+                     mock.Mock(returncode=255, stdout='', stderr='ssh: Connection reset by peer'),
+                     mock.Mock(returncode=255, stdout='', stderr='Connection closed by 198.18.0.18 port 22\n'),
+                     mock.Mock(returncode=255, stdout='', stderr='Connection closed by 2001:db8::1 port 2222')]
         for response in responses:
             with mock.patch('preserve.remote_call', return_value=response) as call, mock.patch('preserve.time.sleep'):
                 with self.assertRaises(preserve.SchedulerQueryUnavailable):
@@ -54,6 +56,10 @@ class PipelineTests(unittest.TestCase):
         for response in (mock.Mock(returncode=1, stdout='', stderr='quota Input/output error'),
                          mock.Mock(returncode=255, stdout='', stderr='Permission denied (publickey)'),
                          mock.Mock(returncode=255, stdout='', stderr='Permission denied\nConnection reset by peer'),
+                         mock.Mock(returncode=255, stdout='{}', stderr='Connection closed by 198.18.0.18 port 22'),
+                         mock.Mock(returncode=255, stdout='', stderr='Permission denied: Connection closed by host port 22'),
+                         mock.Mock(returncode=255, stdout='', stderr='Input/output error\nConnection closed by host port 22'),
+                         mock.Mock(returncode=255, stdout='', stderr='Connection closed by host port unknown'),
                          mock.Mock(returncode=75, stdout='{"scheduler_unavailable": 1}', stderr='')):
             with mock.patch('preserve.remote_call', return_value=response), mock.patch('preserve.time.sleep'):
                 with self.assertRaises(RuntimeError) as error:
@@ -61,6 +67,7 @@ class PipelineTests(unittest.TestCase):
             self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
         for command in ('_submit', '_skip_broken'):
             for response in (mock.Mock(returncode=255, stdout='', stderr='ssh: Connection reset by peer'),
+                             mock.Mock(returncode=255, stdout='', stderr='Connection closed by 198.18.0.18 port 22'),
                              mock.Mock(returncode=75, stdout=json.dumps(proof), stderr='')):
                 with mock.patch('preserve.remote_call', return_value=response) as call, mock.patch('preserve.time.sleep'):
                     with self.assertRaises(RuntimeError) as error:
@@ -186,6 +193,7 @@ class PipelineTests(unittest.TestCase):
             staged, verified, cleaned, submitted = {}, set(), [], []
             copying, release_copy, published = threading.Event(), threading.Event(), threading.Event()
             queries, degraded = [0], []
+            read_snapshot = preserve.remote_json
 
             def prepare(record, state):
                 marker = dict(record, run_dir='/stage/' + record['stem'], code_root='/code',
@@ -205,6 +213,13 @@ class PipelineTests(unittest.TestCase):
                     if queries[0] in (1, 2, 4, 5):
                         if queries[0] >= 4:
                             self.assertTrue(copying.wait(2))
+                            closed = mock.Mock(returncode=255, stdout='',
+                                               stderr='Connection closed by 198.18.0.18 port 22\n')
+                            with mock.patch('preserve.remote_call', return_value=closed) as connection:
+                                try:
+                                    return read_snapshot(alias, code, arguments)
+                                finally:
+                                    self.assertEqual(connection.call_count, 3)
                         raise preserve.SchedulerQueryUnavailable('SECMAN:2007 read failure')
                     return copy.deepcopy(dict(runs=list(staged.values()), jobs=[], queue=preserve.queue_counts([]),
                         reserved_bytes=len(staged) * preserve.GIB, output_bytes=0,
@@ -253,6 +268,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(cleaned, [])
                 self.assertEqual(submitted, [])
                 if queries[0] == 4:
+                    self.assertIn('Connection closed by 198.18.0.18 port 22', state['scheduler_error'])
                     release_copy.set()
                     self.assertTrue(published.wait(2))
                 if queries[0] == 5:

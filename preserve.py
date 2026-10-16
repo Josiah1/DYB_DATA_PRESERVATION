@@ -1447,10 +1447,11 @@ def remote_json(alias, code_root, arguments, check=True):
             result = remote_call(alias, code_root, arguments, check=check and arguments[0] not in SCHEDULER_QUERY_PHASES)
             if check and arguments[0] in SCHEDULER_QUERY_PHASES and result.returncode:
                 if (arguments[0] == "_pool" and result.returncode == 255 and not result.stdout.strip() and
-                        len(result.stderr.strip().splitlines()) == 1 and re.search(
+                        len(result.stderr.strip().splitlines()) == 1 and (re.search(
                         r"Connection (?:reset by peer|timed out)|Broken pipe|"
                         r"Connection to .+ closed by remote host|Timeout, server .+ not responding",
-                        result.stderr)):
+                        result.stderr) or re.fullmatch(
+                            r"Connection closed by \S+ port [0-9]+", result.stderr.strip()))):
                     raise SchedulerQueryUnavailable("read-only scheduler SSH transport failed: " + result.stderr.strip())
                 if result.returncode == 75:
                     failure = json.loads(result.stdout)

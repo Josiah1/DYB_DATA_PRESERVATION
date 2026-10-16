@@ -130,6 +130,23 @@ fresh successful global query. The checker warns about the unknown queue and
 automatic retry; stopped heartbeats, fatal errors and prolonged lack of verified
 output still alert normally.
 
+On October 16 at 08:53 UTC, the configured SSH route closed connections with
+`Connection closed by 198.18.0.18 port 22`. Three read-only pool attempts and
+three bounded rsync attempts failed, leaving 1,296 verified local runs and
+the resumable run39279 incoming directory intact. This infrastructure failure
+is not an input gap. The exact OpenSSH `Connection closed by HOST port NUMBER`
+line now joins the existing read-only transport matcher: only `_pool`, exit
+255, empty stdout, and a single matching stderr line permit automatic
+unknown-queue deferral. Partial stdout, mixed diagnostics, authentication
+failures, and SSH loss in mutable helpers remain fatal. Transfer retries
+retain their existing three-attempt limit and verification/mount checks.
+Recovery requires fresh global writer/intent state and one controller; no
+shared proxy, DNS, authentication, selection, or source configuration changes
+are needed. The focused regression carries the actual closure diagnostic
+through repeated outage cycles while a published copy waits for a fresh
+query before cleanup. Private live evidence is in
+`build/oct16-ssh-recovery-result.json`.
+
 `_submit` and `_skip_broken` independently query before intent creation or
 reconciliation, broken-input journaling, or output changes. Only a structured
 exit-75 response naming that exact command and `before_mutation` phase permits
