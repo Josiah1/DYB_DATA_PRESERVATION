@@ -1455,12 +1455,19 @@ def remote_json(alias, code_root, arguments, check=True):
                     raise SchedulerQueryUnavailable("read-only scheduler SSH transport failed: " + result.stderr.strip())
                 if result.returncode == 75:
                     failure = json.loads(result.stdout)
+                    startup_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+                    # This exact IHEP login warning also accompanies successful remote commands.
+                    login_warning = "/dybfs2/users/lijj16/Libs/root-6.32.08-install/bin/thisroot.csh: No such file or directory."
                     if (isinstance(failure, dict) and set(failure) == {"scheduler_unavailable", "command", "phase"} and
                             failure["command"] == arguments[0] and
-                            failure["phase"] == SCHEDULER_QUERY_PHASES[arguments[0]] and not result.stderr.strip() and
+                            failure["phase"] == SCHEDULER_QUERY_PHASES[arguments[0]] and
+                            len(startup_lines) <= 2 and all(line == login_warning for line in startup_lines) and
                             isinstance(failure["scheduler_unavailable"], str) and failure["scheduler_unavailable"]):
-                        raise SchedulerQueryUnavailable("{} scheduler query unavailable ({}): {}".format(
-                            arguments[0], failure["phase"], failure["scheduler_unavailable"]))
+                        detail = "{} scheduler query unavailable ({}): {}".format(
+                            arguments[0], failure["phase"], failure["scheduler_unavailable"])
+                        if startup_lines:
+                            detail += "\nSSH startup stderr:\n" + result.stderr
+                        raise SchedulerQueryUnavailable(detail)
                 raise RuntimeError("remote command {} failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
                     arguments[0], result.returncode, result.stdout, result.stderr))
             lines = [line for line in result.stdout.splitlines() if line.strip()]

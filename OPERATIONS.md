@@ -153,6 +153,21 @@ exit-75 response naming that exact command and `before_mutation` phase permits
 the same safe deferral. Each mutable helper still gets one SSH attempt; SSH loss
 during mutation, ambiguous intents and unrecognized failures stop for inspection.
 The next controller cycle always obtains fresh global writer state before retrying.
+
+The October 16 17:02 UTC stop exposed a client proof-parsing mismatch: SSH's
+obsolete ROOT-profile warning accompanied an otherwise valid exit-75 scheduler
+proof. The client now permits zero, one or two copies of only the exact line
+`/dybfs2/users/lijj16/Libs/root-6.32.08-install/bin/thisroot.csh: No such file or directory.`
+alongside the unchanged exact-command/phase JSON proof. The warning remains in
+the recorded scheduler error. Any additional diagnostic, altered path, excess
+repetition, malformed stdout, wrong phase or ambiguous SSH failure stays fatal.
+This applies to `_pool`, `_submit` and `_skip_broken`; the latter two still get
+one SSH attempt and must return to a fresh pool before another invocation.
+No login profile, shared site configuration, worker/input policy or retry budget
+changes. Focused fixtures exercise the actual response parser across repeated
+outage cycles, deferred verified-transfer cleanup and both pre-mutation helpers.
+Private live evidence is in `build/oct16-scheduler-proof-recovery-result.json`.
+
 An already authorized transfer may finish during the outage, but its staging
 cannot be deleted until a fresh successful query confirms no jobs, worker
 markers or unresolved intent remain. A concurrent checksum/copy failure remains

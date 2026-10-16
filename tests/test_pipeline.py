@@ -75,6 +75,43 @@ class PipelineTests(unittest.TestCase):
                 self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
                 self.assertEqual(call.call_count, 1, 'SSH loss or wrong-phase proof never authorizes mutation replay')
 
+    def test_scheduler_proof_accepts_only_the_observed_login_warning(self):
+        warning = '/dybfs2/users/lijj16/Libs/root-6.32.08-install/bin/thisroot.csh: No such file or directory.\n'
+        for command in ('_pool', '_submit', '_skip_broken'):
+            proof = dict(scheduler_unavailable='SECMAN:2007:Read failure during security negotiation.',
+                         command=command, phase=preserve.SCHEDULER_QUERY_PHASES[command])
+            for count in (0, 1, 2):
+                response = mock.Mock(returncode=75, stdout=json.dumps(proof), stderr=warning * count)
+                with self.subTest(command=command, warnings=count), \
+                        mock.patch('preserve.remote_call', return_value=response) as call, \
+                        mock.patch('preserve.time.sleep'):
+                    with self.assertRaises(preserve.SchedulerQueryUnavailable) as error:
+                        preserve.remote_json('host', '/code', [command])
+                    if count:
+                        self.assertIn(warning, str(error.exception), 'startup diagnostics remain visible')
+                self.assertEqual(call.call_count, 3 if command == '_pool' else 1)
+            invalid = [(75, proof, stderr) for stderr in (
+                warning * 3, warning + 'Input/output error\n', 'Permission denied\n' + warning,
+                warning.replace('6.32.08', '6.32.09'), 'ERROR: ' + warning)]
+            invalid += [(75, dict(proof, phase='after_mutation'), warning),
+                        (75, dict(proof, command='_cleanup'), warning),
+                        (75, dict(proof, unexpected=True), warning),
+                        (75, dict(proof, scheduler_unavailable=''), warning),
+                        (1, proof, warning), (255, proof, warning)]
+            for status, value, stderr in invalid:
+                response = mock.Mock(returncode=status, stdout=json.dumps(value), stderr=stderr)
+                with self.subTest(command=command, status=status, proof=value, stderr=stderr), \
+                        mock.patch('preserve.remote_call', return_value=response) as call, \
+                        mock.patch('preserve.time.sleep'):
+                    with self.assertRaises(RuntimeError) as error:
+                        preserve.remote_json('host', '/code', [command])
+                    self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
+                self.assertEqual(call.call_count, 3 if command == '_pool' else 1)
+            response = mock.Mock(returncode=75, stdout='unexpected log\n' + json.dumps(proof), stderr=warning)
+            with mock.patch('preserve.remote_call', return_value=response), mock.patch('preserve.time.sleep'):
+                with self.assertRaises(json.JSONDecodeError):
+                    preserve.remote_json('host', '/code', [command])
+
     def test_pre_mutation_scheduler_failure_preserves_intents_good_chunks_and_broken_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary)
@@ -128,6 +165,7 @@ class PipelineTests(unittest.TestCase):
                            status=dict(state='FAILED' if extra else 'PENDING', failed=int(bool(extra)), running=0))
                 original = copy.deepcopy(run)
                 queries, failure_at, calls, verified, cleaned = [0], [None], [], set(), []
+                read_command = preserve.remote_json
 
                 def remote(alias, code, arguments):
                     command = arguments[0]
@@ -139,7 +177,15 @@ class PipelineTests(unittest.TestCase):
                     calls.append(command)
                     if command == failing_command and failure_at[0] is None:
                         failure_at[0] = queries[0]
-                        raise preserve.SchedulerQueryUnavailable(command + ' proved before_mutation read failure')
+                        proof = dict(scheduler_unavailable='SECMAN:2007 read failure',
+                                     command=command, phase='before_mutation')
+                        warning = '/dybfs2/users/lijj16/Libs/root-6.32.08-install/bin/thisroot.csh: No such file or directory.\n'
+                        response = mock.Mock(returncode=75, stdout=json.dumps(proof), stderr=warning * 2)
+                        with mock.patch('preserve.remote_call', return_value=response) as connection:
+                            try:
+                                return read_command(alias, code, arguments)
+                            finally:
+                                self.assertEqual(connection.call_count, 1, 'no immediate mutable helper replay')
                     if command in ('_skip_broken', '_submit'):
                         self.assertGreater(queries[0], failure_at[0], 'must refresh global writer state before retry')
                     if command == '_skip_broken':
@@ -162,6 +208,7 @@ class PipelineTests(unittest.TestCase):
                         self.assertIsNone(report['queue'])
                         self.assertEqual(report['scheduler_status'], 'unavailable')
                         self.assertFalse(report['new_run_admission'])
+                        self.assertIn('thisroot.csh: No such file or directory.', report['scheduler_error'])
                         self.assertEqual(run, original)
                         self.assertEqual(calls, [failing_command])
 
@@ -220,7 +267,15 @@ class PipelineTests(unittest.TestCase):
                                     return read_snapshot(alias, code, arguments)
                                 finally:
                                     self.assertEqual(connection.call_count, 3)
-                        raise preserve.SchedulerQueryUnavailable('SECMAN:2007 read failure')
+                        proof = dict(scheduler_unavailable='SECMAN:2007 read failure',
+                                     command='_pool', phase='read_only')
+                        warning = '/dybfs2/users/lijj16/Libs/root-6.32.08-install/bin/thisroot.csh: No such file or directory.\n'
+                        response = mock.Mock(returncode=75, stdout=json.dumps(proof), stderr=warning * 2)
+                        with mock.patch('preserve.remote_call', return_value=response) as connection:
+                            try:
+                                return read_snapshot(alias, code, arguments)
+                            finally:
+                                self.assertEqual(connection.call_count, 3)
                     return copy.deepcopy(dict(runs=list(staged.values()), jobs=[], queue=preserve.queue_counts([]),
                         reserved_bytes=len(staged) * preserve.GIB, output_bytes=0,
                         quota=dict(free_bytes=500 * preserve.GIB, used_files=1, limit_files=200000))), 0
@@ -267,6 +322,8 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(staged[first['run_dir']], original[first['run_dir']])
                 self.assertEqual(cleaned, [])
                 self.assertEqual(submitted, [])
+                if queries[0] in (1, 2):
+                    self.assertIn('thisroot.csh: No such file or directory.', state['scheduler_error'])
                 if queries[0] == 4:
                     self.assertIn('Connection closed by 198.18.0.18 port 22', state['scheduler_error'])
                     release_copy.set()
