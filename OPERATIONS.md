@@ -1143,3 +1143,44 @@ unchanged. Original proof is portable
 queue, retained-run and monitoring evidence is the small ignored
 `build/oct15-34533-recovery-result.json`. Hourly and five-minute monitoring
 remain enabled.
+
+## 2026-10-17 operator retries for EH2/run41297 and run40642
+
+The user explicitly requested cancellation and rerun of overdue
+P17B/EH2/run41297 and more attempts for P17B/EH2/run40642. The controller
+was briefly stopped to serialize recovery with its automatic submissions;
+existing partial transfers and unrelated remote jobs were retained.
+
+Ordinary removal of `82325612.21` was accepted at 13:43:42 UTC. Before
+resubmission, a fresh query proved the old job absent, scheduler history
+recorded removal with SIGTERM, and its former slot on bws1005 was occupied
+by another job. The locked submission helper started attempt two, cluster
+`82418398`, at 13:46:31 UTC. By 13:48:18 UTC all 22 chunks were complete.
+
+For run40642, fresh global queue and worker-marker checks proved no old
+writers or unresolved intent. The scoped operator extension allows up to
+two additional manual submissions, four total, without changing the
+campaign-wide two-attempt default. Attempt three, cluster `82418372`, was
+submitted at 13:45:08 UTC. All five unfinished chunks passed conversion
+and ROOT verification, with blank worker stderr; the last finished at
+13:51:29 UTC, completing 20/20 chunks. No fourth attempt was needed.
+Any further manual retry would still require the no-writer, intent,
+input-identity, quota and job-cap checks.
+
+Both submissions used the existing worker, converter, short class, 1 CPU,
+1,024 MB, 300-job cap and 400-GiB staging budget. All 180 fingerprints of
+the 36 previously good chunks were unchanged: chunk lists, source reports,
+OK/report hashes and ROOT sizes/mtimes. Frozen catalogs and existing gaps
+were preserved. Original evidence and receipts are portable in
+`provenance/operator-retry-run41297-EH2.json` and
+`provenance/operator-retry-run40642-EH2.json`; each run also carries
+`operator-retry-20261017.json`. The existing controller was restarted
+after both submission receipts were recorded.
+
+At 13:54:53 UTC the refreshed controller had no error, overdue-run warning
+or exhausted-run warning and resumed transfer of run47925. Run40642 had
+no remaining scheduler jobs. Run41297 still had verification task
+`82418398.15` in the queue for an already-good chunk, so finalization and
+local transfer remained pending despite all output chunks being complete.
+The five-minute and hourly monitors remain enabled. These observations
+do not replace subsequent transfer checksum verification.
