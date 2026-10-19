@@ -11,6 +11,42 @@ import preserve
 
 
 class PipelineTests(unittest.TestCase):
+    def test_bare_ad_fetch_failure_preserves_submission_state_before_mutation(self):
+        diagnostic = ('\n-- Failed to fetch ads from: <192.168.51.62:9618?'
+                      'alias=schedd06.ihep.ac.cn> : schedd06.ihep.ac.cn\n\n')
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            run = stage / 'run'
+            (run / 'status').mkdir(parents=True)
+            (run / 'status/000000.ok').write_text('verified good chunk')
+            (run / 'submissions.json').write_text('[]')
+            marker = dict(chunk_count=2)
+            for returncode in (0, 1):
+                for intent_present in (False, True):
+                    intent = run / 'submission-intent.json'
+                    if intent_present:
+                        intent.write_text('{"unknown_submission":true}')
+                    before = {str(p.relative_to(run)): p.read_bytes()
+                              for p in run.rglob('*') if p.is_file()}
+                    response = mock.Mock(returncode=returncode, stdout='', stderr=diagnostic)
+                    with self.subTest(returncode=returncode, intent=intent_present), \
+                            mock.patch('preserve.subprocess.run', return_value=response) as backend:
+                        with self.assertRaises(preserve.SchedulerQueryUnavailable):
+                            preserve.submit_locked(run, marker, str(stage), 'dyw', 'short', 1024, True, 300)
+                        self.assertEqual(backend.call_count, 1)
+                        self.assertEqual(backend.call_args.args[0][0], 'condor_q')
+                    self.assertEqual({str(p.relative_to(run)): p.read_bytes()
+                                      for p in run.rglob('*') if p.is_file()}, before)
+                    if intent.exists():
+                        intent.unlink()
+        for stderr in ('', diagnostic + 'Permission denied opening quota data\n',
+                       diagnostic + 'Input/output error\n', diagnostic + 'unrecognized failure\n'):
+            response = mock.Mock(returncode=1, stdout='', stderr=stderr)
+            with self.subTest(stderr=stderr), mock.patch('preserve.subprocess.run', return_value=response):
+                with self.assertRaises(RuntimeError) as error:
+                    preserve.scheduler_jobs('/stage')
+                self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
+
     def test_only_known_read_only_query_failures_are_retryable(self):
         message = 'SECMAN:2007:Read failure during security negotiation.'
         failure = mock.Mock(returncode=0, stdout='[{"partial": true}]', stderr=(
@@ -177,7 +213,7 @@ class PipelineTests(unittest.TestCase):
                     calls.append(command)
                     if command == failing_command and failure_at[0] is None:
                         failure_at[0] = queries[0]
-                        proof = dict(scheduler_unavailable='SECMAN:2007 read failure',
+                        proof = dict(scheduler_unavailable='-- Failed to fetch ads from: schedd06.ihep.ac.cn',
                                      command=command, phase='before_mutation')
                         warning = '/dybfs2/users/lijj16/Libs/root-6.32.08-install/bin/thisroot.csh: No such file or directory.\n'
                         response = mock.Mock(returncode=75, stdout=json.dumps(proof), stderr=warning * 2)
@@ -209,6 +245,7 @@ class PipelineTests(unittest.TestCase):
                         self.assertEqual(report['scheduler_status'], 'unavailable')
                         self.assertFalse(report['new_run_admission'])
                         self.assertIn('thisroot.csh: No such file or directory.', report['scheduler_error'])
+                        self.assertIn('-- Failed to fetch ads from:', report['scheduler_error'])
                         self.assertEqual(run, original)
                         self.assertEqual(calls, [failing_command])
 

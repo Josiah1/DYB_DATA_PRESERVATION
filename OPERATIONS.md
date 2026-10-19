@@ -173,6 +173,30 @@ cannot be deleted until a fresh successful query confirms no jobs, worker
 markers or unresolved intent remain. A concurrent checksum/copy failure remains
 fatal. No queue failure is classified as a missing or broken input.
 
+On October 19 at 11:44 UTC, `_submit` stopped before creating an intent for
+P17B/EH2/run71464 because the global query emitted only `-- Failed to fetch
+ads from: ...`, without the additional SECMAN line. The retry classifier now
+accepts a nonempty set consisting exclusively of ad-fetch diagnostics and/or
+the exact known SECMAN read-failure line. Additional permission, I/O or unknown
+diagnostics remain fatal, as do unsuccessful queries with no recognized detail.
+The existing exact-command/phase proof still controls client deferral; SSH loss
+during submission never permits a replay. All three shared query callers retain
+their existing read-only or pre-mutation boundaries and unknown-queue safeguards.
+
+The 12:00 UTC independent query found 140 COMPLETE runs among 141 staged runs,
+zero jobs and no unresolved intents. Run71464 retained its fixed 221-input
+catalog, 219 prepared minis and two previously recorded missing inputs; it had
+no receipt, worker marker, failed chunk or verified output yet. The existing
+single controller was already reconciling retained staging after its 11:55 UTC
+restart. This compatible helper-only change can be atomically installed without
+interrupting that controller or its transfer: remote helpers import the code on
+each invocation, and the client already understands the exit-75 proof. The
+regression first reproduced the observed failure, then checked no intent, receipt
+or good-chunk changes on failed queries, including an existing uncertain intent.
+The focused pipeline, monitor, hourly, startup, broken-mini and content-hold suites
+ran 56 tests: 54 passed and two real-LCG checks were skipped on Ubuntu. Runtime
+evidence is kept in ignored `build/oct19-submission-query-recovery-result.json`.
+
 The October 13 regression exercises repeated failed query cycles before work
 and after a verified transfer publishes, deferred cleanup, eventual admission
 and transfer recovery, both pre-mutation helpers, preserved intents/good chunks,

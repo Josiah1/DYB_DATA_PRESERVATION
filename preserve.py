@@ -664,7 +664,7 @@ def scheduler_jobs(stage_root):
     if result.returncode or result.stderr.strip():
         diagnostics = [line.strip() for line in result.stderr.splitlines() if line.strip()]
         read_failure = "SECMAN:2007:Read failure during security negotiation."
-        transient = read_failure in diagnostics and all(
+        transient = bool(diagnostics) and all(
             line == read_failure or line.startswith("-- Failed to fetch ads from:") for line in diagnostics)
         error_type = SchedulerQueryUnavailable if transient else RuntimeError
         raise error_type("scheduler query failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
