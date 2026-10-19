@@ -1241,3 +1241,57 @@ then its staging was cleaned. The verified archive advanced beyond the
 1,853-run baseline. This is a local operational recovery with no
 production source deployment or new missing/broken classification; the
 five-minute and hourly monitors remain enabled.
+
+## 2026-10-19 restart after workstation reboot
+
+The workstation booted at approximately 06:47 UTC. The existing campaign
+service was inactive after boot; both monitoring timers had restarted. The
+archive UUID `2A4F48F8BDFEE355` was mounted read-write with ntfs-3g at
+`/media/josiah/LAYJ萤捷`. The saved-run baseline was 1,865 of 4,009 runs,
+388,916 processed inputs and 5,062,423,485,478 artifact bytes. Existing gap
+accounting was 1,863 missing and 1,730 broken inputs.
+
+Before restarting, the controller lock was free and an independent local
+verification of P17B/EH2/run62420 passed all artifact hashes and metadata
+checks (217 inputs, 2,936,272,152 artifact bytes). The successful 06:51 UTC
+global scheduler query found no remaining campaign jobs, all 139 staged
+runs COMPLETE, no failed chunks or unresolved submission intents, and
+403,714,273,451 reserved bytes within the 400-GiB budget. The interrupted
+run62429 transfer retained 938,423,811 bytes under its `.incoming` directory.
+The existing service was started at 06:51:47 UTC, retaining its controller
+lock, sleep inhibitor, production settings and verified-output cleanup
+guards. Recovery used the existing launcher without a code deployment.
+
+Initial reconciliation of all 139 retained runs took approximately nine
+minutes; the first fresh controller heartbeat appeared at 07:00:49 UTC.
+The five-minute monitor reported a stale heartbeat during that startup
+phase, then cleared after reconciliation. The controller resumed run62429's
+partial transfer and admitted a 22-task array. At 07:04:11 UTC only seven
+of those tasks remained running, with no held jobs, failed chunks or
+unresolved intents; reservations remained below 400 GiB.
+
+The hourly helper initially reported that its original Codex conversation
+was not loaded after reboot. Its exact project/thread identity was checked,
+with an empty input queue and a completed latest turn. One native
+`thread/resume` on the existing backend reloaded that same conversation
+using the configured gpt-6.1-sol/max binding. A subsequent independent
+`NativeOwner` check passed with the owner idle and its queue empty; no new
+turn or message was submitted. The hourly status returned to `healthy`,
+and both monitoring timers stayed enabled.
+
+At 07:06:29 UTC an independent verification of the newly published
+P17B/EH2/run62429 passed: 224 processed inputs, 14 ROOT outputs and
+3,063,373,818 artifact bytes, with no input gaps. The controller logged
+verified local publication before deleting that run's remote staging,
+then admitted run69999. The archive advanced to 1,866 saved runs and
+389,140 processed inputs. This establishes a new verified save after
+restart, beyond service activity or partial-copy growth alone. The whole
+campaign remains in progress, with the previously recorded missing/broken
+input gaps retained. This check did not rehash the entire archive.
+
+The local RTX 5070 Ti also passed live CUDA checks in the existing
+`~/.venvs/gpu` environment: PyTorch 2.12.0+cu130 vector reduction and matrix
+multiplication, and CuPy 14.1.1 vector reduction. The driver was 615.71.09;
+no GPU repair was necessary. Compression continues on IHEP CPU workers.
+Machine-local observations are under
+`~/.home-agent/state/diagnostics/*20261019.json`.
