@@ -1184,3 +1184,60 @@ no remaining scheduler jobs. Run41297 still had verification task
 local transfer remained pending despite all output chunks being complete.
 The five-minute and hourly monitors remain enabled. These observations
 do not replace subsequent transfer checksum verification.
+
+## 2026-10-19 bounded release of run69035 held jobs
+
+The hourly owner check found the controller stopped on two held tasks in
+P17B/EH2/run69035, cluster `82537046`. Task 5 failed to access its initial
+scratch directory on gecam001 (hold code 6/subcode 2); task 6 failed to
+open scheduler stdout on gecam003 (code 7/subcode 2). Neither task reached
+the worker: its logs, status/report markers and output were absent. The
+same retained directory was readable on the login node, and eight other
+chunks had passed conversion and ROOT verification on bws nodes after the
+holds occurred. The deeper execute-node/storage visibility cause remains
+unconfirmed. These errors are not missing or broken mini observations.
+
+Original job ads, exact held chunk/source identities, receipts and the
+eight good chunks were preserved before recovery. A successful fresh
+global query under the submission lock found only the two held jobs for
+this run, no running worker markers or unresolved intent, and adequate
+300-job/400-GiB/quota headroom. At 05:04:33 UTC the owner used one
+[`condor_release`](https://htcondor.readthedocs.io/en/latest/man-pages/condor_release.html)
+for the original IDs `82537046.5` and `82537046.6`. The collector advertises
+`scheduler@schedd06.ihep.ac.cn`; targeting the hostname alone failed a
+read-only preflight before any release or recovery journal was written.
+No job was removed and no replacement array was submitted. The release
+journal permits one manual release; an interrupted or repeated attempt
+must be inspected rather than replayed.
+
+All 40 original good-file fingerprints matched after release: 32 hashes
+of chunk lists, source reports and OK/report files, plus eight ROOT
+sizes/mtimes. The original submission receipt, 151 expected catalog
+inputs, 150 prepared usable minis and one already-recorded missing mini
+were retained. The worker, converter, selection, schema, budgets and
+production source were unchanged. The single controller was started only
+after another successful global query showed no held jobs or unresolved
+intents. Runtime evidence is in the small ignored
+`build/oct19-held-recovery-result.json`; portable original proof and
+release results are `provenance/held-job-recovery-run69035-EH2.json`, and
+the staged run retains `held-job-recovery-20261019.json`.
+
+Released task 6 converted its 16 minis and passed ROOT verification on
+lhcb002 at 05:11:39 UTC (214,904,545 output bytes). At the independent
+05:14:48 UTC query, task 5 was running on cws053 with a worker marker,
+empty stderr and no completion report; it remained unverified and was
+not cancelled or replayed. All 40 original good fingerprints still
+matched. The controller wrote a fresh error-free heartbeat at 05:14:31
+UTC after initial staging reconciliation, then resumed submissions and
+verified transfers. It rechecked the already-published run61897 before
+cleaning its staging; that recheck is excluded from new-save progress
+against the 1,853-run recovery baseline.
+
+By 05:19:02 UTC both released tasks had finished, all 10 run69035 chunks
+were verified, and its marker, original receipt and 40 old fingerprints
+were unchanged. Run61901 was newly checksum/content-verified and
+published on the portable disk (92 minis, 1,242,980,872 artifact bytes),
+then its staging was cleaned. The verified archive advanced beyond the
+1,853-run baseline. This is a local operational recovery with no
+production source deployment or new missing/broken classification; the
+five-minute and hourly monitors remain enabled.
