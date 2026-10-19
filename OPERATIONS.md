@@ -1295,3 +1295,26 @@ multiplication, and CuPy 14.1.1 vector reduction. The driver was 615.71.09;
 no GPU repair was necessary. Compression continues on IHEP CPU workers.
 Machine-local observations are under
 `~/.home-agent/state/diagnostics/*20261019.json`.
+
+### Second reboot, 2026-10-19 07:56 UTC
+
+Both preceding boots logged NVIDIA Xid 79 (GPU lost from the PCIe bus),
+at 06:45:19 and 07:44:47 UTC. After this reboot, PyTorch/CuPy CUDA checks
+and a 64-MiB host/device copy passed; the link reached 32 GT/s under the
+copy workload. These checks establish current access, not a permanent
+fix for the intermittent GPU failure.
+
+The archive had 1,873 saved runs, 390,034 processed inputs and
+5,077,546,333,377 artifact bytes. UUID/ntfs-3g/read-write and controller-lock
+checks passed. A fresh global queue query found 137 complete staged runs,
+no jobs, failures or submission intents, and reservations below 400 GiB.
+Run62697 independently passed local checksum/metadata verification.
+The existing controller restarted at 07:59:24 UTC, and its original hourly
+recovery owner was reloaded idle without queueing a message or starting a
+turn. Diagnostic evidence is in
+`~/.home-agent/state/diagnostics/dyb-reboot-20261019T0758Z/`.
+At 08:08:34 UTC the controller had a fresh error-free heartbeat and resumed
+run62704; its partial transfer grew from 1,504,122,737 to 1,645,942,641 bytes.
+The five-minute alert cleared, and the original hourly owner was connected
+and active. This recovery check confirmed transfer progress; it did not
+claim a new finalized save or repeat the complete archive hash scan.
