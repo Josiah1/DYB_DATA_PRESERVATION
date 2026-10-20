@@ -3,6 +3,7 @@
 import fcntl
 import json
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import sys
@@ -32,22 +33,38 @@ class NativeOwner:
         if version.get("status") != "running":
             raise RuntimeError("existing Codex daemon unavailable; no replacement started")
         self.socket = version["socketPath"]  # Resolve every invocation; never persist the endpoint.
+        self.refresh()
+
+    def refresh(self):
         thread = self.rpc("thread/read", includeTurns=False)["thread"]
         if (thread["id"] != self.thread_id or Path(thread["cwd"]).resolve() != PROJECT or
-                thread["status"]["type"] not in ("active", "idle") or thread["modelProvider"] != "openai"):
-            raise RuntimeError("authorized conversation is not loaded in this backend/project; no new writer started")
+                thread["status"]["type"] not in ("active", "idle", "notLoaded") or
+                thread["modelProvider"] != "openai" or thread.get("model") != "gpt-6.1-sol" or
+                thread.get("reasoningEffort") != "max"):
+            raise RuntimeError("authorized conversation identity/settings mismatch; no new writer started")
         self.active = thread["status"]["type"] == "active"
+        self.loaded = thread["status"]["type"] != "notLoaded"
 
     def rpc(self, method, **params):
-        response = subprocess.run([sys.executable, str(RPC_HELPER), "--socket", self.socket],
-            input=json.dumps(dict(method=method, params=dict(threadId=self.thread_id, **params))),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
-        if response.returncode:
-            raise RuntimeError("native conversation RPC failed: " + response.stderr[-1200:])
-        value = json.loads(response.stdout)
+        transport = runpy.run_path(str(RPC_HELPER))
+        if method == "thread/resume":
+            # Reuse the bounded transport; the installed helper's CLI only exposes read/queue operations.
+            transport["METHODS"][method] = ("threadId",)
+            transport["MUTATIONS"].add(method)
+        value = transport["call"](self.socket,
+            dict(method=method, params=dict(threadId=self.thread_id, **params)), timeout=15)
         if "error" in value:
             raise RuntimeError("native conversation RPC rejected: " + str(value["error"])[:1200])
         return value["result"]
+
+    def ensure_loaded(self):
+        self.refresh()
+        if not self.loaded:
+            self.rpc("thread/resume", excludeTurns=True, model="gpt-6.1-sol",
+                     config=dict(model_reasoning_effort="max"))
+            self.refresh()
+            if not self.loaded:
+                raise RuntimeError("authorized conversation did not load; retain queued request")
 
     def pending(self):
         queue = self.rpc("thread/queue/list")
@@ -64,6 +81,7 @@ class NativeOwner:
             "--message", message], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
         if result.returncode:
             raise RuntimeError("native queue failed or delivery uncertain; inspect before any replay: " + result.stderr[-1200:])
+        self.ensure_loaded()  # A persisted queue does not run until its existing thread is loaded.
 
 
 def refresh_report():
@@ -124,6 +142,7 @@ def dispatch(report, config, state, persist, owner_factory=None):
     if own:
         for duplicate in own[1:]:
             owner.delete(duplicate)
+        owner.ensure_loaded()
         state["request"] = dict(state.get("request") or {}, phase="queued", id=own[0]["id"])
         return "already_queued"
     request = state.get("request")
@@ -169,7 +188,7 @@ def run_once(directory=PRIVATE):
                 config = preserve.load_json(directory / "config.json")
                 status["action"] = dispatch(report, config, state, lambda value: save_private(state_path, value))
             save_private(state_path, state)
-        except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+        except (OSError, EOFError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
             status.update(action="blocked", error=str(error)[:2000])
         status["checked_at"] = preserve.utc_now()
         save_private(status_path, status)

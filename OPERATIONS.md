@@ -804,18 +804,20 @@ The user authorized hourly checks and safe recovery through this same native
 Codex conversation. `scripts/hourly_recovery.py` starts the existing five-minute
 metadata checker, requires its fresh report, and records mount UUID, rw/driver,
 portable/internal free space, verified counters and controller queue/storage
-freshness. Healthy checks do not contact Codex or rehash the archive. Alerts or
-warnings request diagnosis/resumption using only the existing loaded owner and
+freshness. Healthy checks with no outstanding request do not contact Codex or
+rehash the archive. Alerts or warnings request diagnosis/resumption using only
+the existing owner and
 `gpt-6.1-sol` with max reasoning. The helper never restarts the campaign itself,
 creates a conversation/daemon, changes credentials or replays submissions.
 
 The private binding is `build/hourly-recovery/config.json` (mode 0600 in a 0700
 directory): `thread_id`, a unique `monitor_id`, this project's `cwd`,
-`model: "gpt-6.1-sol"` and `reasoning_effort: "max"`. It must identify the live
+`model: "gpt-6.1-sol"` and `reasoning_effort: "max"`. It must identify the existing
 authorized conversation; do not create a replacement owner. The current socket
 is resolved with `codex app-server daemon version` on each request. Native
-conversation reads/deletion use the installed ssh-ops `codex-rpc.py`; requests
-use installed `codex queue` with the explicit model/effort. No socket hash or
+conversation reads/deletion use the installed ssh-ops `codex-rpc.py` transport;
+requests use installed `codex queue`. The helper verifies the thread's actual
+model and reasoning effort before delivery. No socket hash or
 thread ID belongs in tracked source, converter-share or public reports.
 
 Install the reviewed units after committing locally:
@@ -848,10 +850,12 @@ mount failures, private state, model binding and dynamic socket resolution.
 The dated private setup/runtime checkpoint is
 `build/oct14-hourly-recovery-result.json`.
 
-The timer survives reboot; the native backend/loaded owner must also be available
-for diagnosis. If unavailable, it records a visible blocker and retries next hour
-without starting a replacement session. An external site or integrity failure
-may still require diagnosis rather than an immediate safe restart. To disable:
+The timer survives reboot; the original native backend must also be available
+for diagnosis. An unloaded existing owner is resumed when recovery is requested.
+An unavailable backend or mismatched owner/settings records a visible blocker and
+retries next hour without starting a replacement session. An external site or
+integrity failure may still require diagnosis rather than an immediate safe
+restart. To disable:
 
 ```bash
 systemctl --user disable --now dyb-preservation-hourly.timer
@@ -1342,3 +1346,32 @@ run62704; its partial transfer grew from 1,504,122,737 to 1,645,942,641 bytes.
 The five-minute alert cleared, and the original hourly owner was connected
 and active. This recovery check confirmed transfer progress; it did not
 claim a new finalized save or repeat the complete archive hash scan.
+
+### Hourly owner reconnection, 2026-10-20
+
+The repeated hourly blocker was the helper's rejection of `notLoaded`, not a
+missing conversation. The original owner had completed its turn, had an empty
+queue and retained the correct project/model/effort, but the helper could not
+clear its old accepted request. The earlier manual resumes restored access
+temporarily; the helper now handles the unloaded state itself.
+
+Healthy reconciliation can clear an old request without loading the owner.
+When recovery is needed, the helper persists and queues the request once, then
+uses native `thread/resume` if that same owner is unloaded. An already queued
+request is deduplicated before resuming; a failed or uncertain resume retains
+the queue for the next check. Identity, project, provider, actual model and
+reasoning effort are checked before delivery and after resume. No daemon or
+conversation is created, and no active turn is interrupted.
+
+Codex 0.163.0's [cold-resume queue test](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/app-server/tests/suite/v2/thread_queue.rs)
+confirms that enqueueing into an unloaded thread persists the message until
+the thread resumes. The installed resume schema was checked before use.
+The existing ssh-ops transport is reused in-process with only `thread/resume`
+added to its local method table; the shared skill is unchanged.
+
+All 25 hourly-recovery and campaign-monitor tests passed. A live hourly check
+cleared the stale request while the owner remained unloaded. One acknowledgement-only
+probe then resumed that exact owner, received its expected reply and completed
+with an empty queue. The campaign controller kept the same PID throughout.
+Private evidence is
+`~/.home-agent/state/diagnostics/dyb-hourly-reconnect-20261020.json`.

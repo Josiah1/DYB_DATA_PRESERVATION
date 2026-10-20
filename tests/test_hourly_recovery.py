@@ -21,6 +21,9 @@ class FakeOwner:
     def pending(self):
         return list(self.entries)
 
+    def ensure_loaded(self):
+        pass
+
     def delete(self, entry):
         self.deleted.append(entry["id"])
         self.entries.remove(entry)
@@ -159,8 +162,22 @@ class HourlyRecoveryTests(unittest.TestCase):
             self.assertIn("existing owner unavailable", status["error"])
             self.assertFalse((root / "state.json").exists())
 
+    def test_transport_disconnect_retains_request_and_records_blocker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = dict(request=dict(phase="submitting"))
+            hourly.save_private(root / "config.json", self.config)
+            hourly.save_private(root / "state.json", state)
+            with mock.patch.object(hourly, "refresh_report", return_value=self.report), \
+                    mock.patch.object(hourly, "NativeOwner", side_effect=EOFError("app-server closed the connection")):
+                status = hourly.run_once(root)
+            self.assertEqual(status["action"], "blocked")
+            self.assertIn("closed the connection", status["error"])
+            self.assertEqual(hourly.preserve.load_json(root / "state.json"), state)
+
     def test_native_binding_resolves_endpoint_each_time_and_never_changes_model(self):
-        thread = dict(id=self.config["thread_id"], cwd=str(hourly.PROJECT), status=dict(type="active"), modelProvider="openai")
+        thread = dict(id=self.config["thread_id"], cwd=str(hourly.PROJECT), status=dict(type="active"),
+                      modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="max")
         versions = [json.dumps(dict(status="running", socketPath=value)) for value in ("/first.sock", "/next.sock")]
         with mock.patch.object(hourly.subprocess, "check_output", side_effect=versions) as daemon, \
                 mock.patch.object(hourly.NativeOwner, "rpc", return_value=dict(thread=thread)), \
@@ -178,14 +195,91 @@ class HourlyRecoveryTests(unittest.TestCase):
         for call in daemon.call_args_list:
             self.assertEqual(call.args[0][1:], ["app-server", "daemon", "version"])
 
-    def test_unloaded_wrong_owner_model_or_incomplete_queue_is_never_replaced(self):
+    def test_unloaded_owner_clears_finished_request_without_resume_or_new_message(self):
+        thread = dict(id=self.config["thread_id"], cwd=str(hourly.PROJECT), status=dict(type="notLoaded"),
+                      modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="max")
+        self.report["alert"] = None
+        self.state["request"] = dict(phase="accepted")
+        def rpc(method, **params):
+            if method == "thread/read":
+                return dict(thread=thread)
+            self.assertEqual(method, "thread/queue/list")
+            return dict(data=[])
+        with mock.patch.object(hourly.subprocess, "check_output",
+                               return_value=json.dumps(dict(status="running", socketPath="/current.sock"))), \
+                mock.patch.object(hourly.NativeOwner, "rpc", side_effect=rpc), \
+                mock.patch.object(hourly.subprocess, "run", side_effect=AssertionError("no new message")):
+            result = hourly.dispatch(self.report, self.config, self.state, lambda _: None)
+        self.assertEqual(result, "healthy_cancelled_pending")
+        self.assertIsNone(self.state["request"])
+
+    def test_unloaded_recovery_queues_once_then_resumes_same_owner_and_reconciles(self):
+        thread = dict(id=self.config["thread_id"], cwd=str(hourly.PROJECT), status=dict(type="notLoaded"),
+                      modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="max")
+        entries, events = [], []
+        def rpc(method, **params):
+            events.append(method)
+            if method == "thread/read":
+                return dict(thread=thread)
+            if method == "thread/queue/list":
+                return dict(data=list(entries))
+            self.assertEqual(method, "thread/resume")
+            self.assertEqual(params, dict(excludeTurns=True, model="gpt-6.1-sol",
+                                         config=dict(model_reasoning_effort="max")))
+            self.assertEqual(len(entries), 1)
+            thread["status"]["type"] = "active"
+            entries.clear()
+            return {}
+        def queue(argv, **kwargs):
+            events.append("queue")
+            entries.append(dict(id="accepted", input=[dict(type="text", text=argv[-1])]))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        with mock.patch.object(hourly.subprocess, "check_output",
+                               return_value=json.dumps(dict(status="running", socketPath="/current.sock"))), \
+                mock.patch.object(hourly.NativeOwner, "rpc", side_effect=rpc), \
+                mock.patch.object(hourly.subprocess, "run", side_effect=queue) as enqueue:
+            self.assertEqual(hourly.dispatch(self.report, self.config, self.state, lambda _: None), "requested")
+            self.assertEqual(hourly.dispatch(self.report, self.config, self.state, lambda _: None), "owner_active")
+        self.assertEqual(enqueue.call_count, 1)
+        self.assertLess(events.index("queue"), events.index("thread/resume"))
+        self.assertEqual(events.count("thread/resume"), 1)
+
+    def test_queued_recovery_survives_failed_resume_without_duplicate_delivery(self):
+        self.owner.ensure_loaded = mock.Mock(side_effect=TimeoutError("resume uncertain"))
+        self.owner.active = False
+        self.dispatch()
+        with self.assertRaisesRegex(TimeoutError, "resume uncertain"):
+            self.dispatch()
+        self.owner.ensure_loaded.side_effect = None
+        self.assertEqual(self.dispatch(), "already_queued")
+        self.assertEqual(len(self.owner.messages), 1)
+
+    def test_native_resume_uses_existing_transport_and_checks_loaded_state(self):
+        owner = object.__new__(hourly.NativeOwner)
+        owner.thread_id, owner.socket = "existing-owner", "/current.sock"
+        transport = dict(METHODS={}, MUTATIONS=set(), call=mock.Mock(return_value=dict(result={})))
+        with mock.patch.object(hourly.runpy, "run_path", return_value=transport):
+            owner.rpc("thread/resume", excludeTurns=True)
+        self.assertEqual(transport["METHODS"], {"thread/resume": ("threadId",)})
+        transport["call"].assert_called_once_with("/current.sock",
+            dict(method="thread/resume", params=dict(threadId="existing-owner", excludeTurns=True)), timeout=15)
+        owner.loaded = False
+        with mock.patch.object(owner, "refresh"), mock.patch.object(owner, "rpc"):
+            with self.assertRaisesRegex(RuntimeError, "retain queued request"):
+                owner.ensure_loaded()
+
+    def test_wrong_owner_model_or_incomplete_queue_is_never_replaced(self):
         with mock.patch.object(hourly.subprocess, "check_output", return_value=json.dumps(dict(status="stopped"))):
             with self.assertRaisesRegex(RuntimeError, "no replacement"):
                 hourly.NativeOwner(self.config)
         for thread in (
                 dict(id="different", cwd=str(hourly.PROJECT), status=dict(type="active"), modelProvider="openai"),
                 dict(id="existing-owner", cwd="/tmp", status=dict(type="active"), modelProvider="openai"),
-                dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="notLoaded"), modelProvider="openai")):
+                dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="systemError"), modelProvider="openai"),
+                dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="idle"),
+                     modelProvider="openai", model="fallback", reasoningEffort="max"),
+                dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="idle"),
+                     modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="low")):
             with mock.patch.object(hourly.subprocess, "check_output", return_value=json.dumps(dict(status="running", socketPath="/current.sock"))), \
                     mock.patch.object(hourly.NativeOwner, "rpc", return_value=dict(thread=thread)):
                 with self.assertRaisesRegex(RuntimeError, "no new writer"):
