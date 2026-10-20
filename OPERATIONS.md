@@ -1324,6 +1324,44 @@ no GPU repair was necessary. Compression continues on IHEP CPU workers.
 Machine-local observations are under
 `~/.home-agent/state/diagnostics/*20261019.json`.
 
+## 2026-10-20 recovery from a transfer connection outage
+
+At 08:37 UTC, the SSH route closed an active run72443 transfer after roughly
+4.11 GB had arrived. The initial rsync protocol disconnect was followed by
+two immediate connection failures; the existing bounded transfer retries were
+exhausted. Read-only pool queries independently lost the connection, correctly
+leaving queue, quota and reservations unknown. The transfer error stopped the
+controller at 08:39:16 UTC. This is an infrastructure failure, not a missing or
+broken mini observation; the deeper route/site cause was not established.
+
+The 09:01 UTC independent global query succeeded: zero jobs, zero unresolved
+intents, 255 COMPLETE runs among 256 staged runs, and 429,376,190,362 reserved
+bytes within 400 GiB. The sole incomplete run, P17B/EH3/run38146, was prepared
+but never submitted, with no running or failed worker markers. The archive
+baseline was 2,055 finalized runs, 430,087 processed inputs and
+5,615,288,304,616 artifact bytes, with 2,066 missing and 1,730 broken gaps.
+
+Before the authorized single-service start at 09:02:53 UTC, the portable UUID
+and writable NTFS-3G mount passed checks, the local controller lock was free,
+and run72443's retained `run.json`, `SHA256SUMS`, full `catalog.list` and
+completion marker matched their staged counterparts. Its 390 expected inputs,
+389 processed minis and one previously recorded missing file were unchanged.
+The 4,113,371,927-byte incoming tree was retained for resumable copying. No
+compression array was replayed and no source, selection, worker, converter,
+budget or production-code change was needed. The existing launcher reconciles
+all retained staging before its first new heartbeat; an older fatal heartbeat
+must not be mistaken for a new failure while its adoption log is advancing.
+
+Reconciliation completed at approximately 09:20 UTC. The previously unsubmitted
+run38146 received its first array receipt, cluster 82629299, at 09:20:19 UTC.
+The 09:20:55 UTC independent query showed 11 single-core jobs running, two idle,
+no held jobs or unresolved intents, and worker ROOT partials growing on cws049
+and lhws092. A fresh 09:20:40 UTC controller heartbeat had `error: null`, and the
+09:20:54 checker cleared both alert and warning. The resumed run72443 incoming
+tree had grown to 4,218,561,047 bytes. Its publication and remote cleanup still
+require the unchanged full run verification and fresh writer checks. Compact
+current evidence is in ignored `build/oct20-transfer-recovery-result.json`.
+
 ### Second reboot, 2026-10-19 07:56 UTC
 
 Both preceding boots logged NVIDIA Xid 79 (GPU lost from the PCIe bus),
