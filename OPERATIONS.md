@@ -1427,6 +1427,27 @@ selection, 300-job/400-GiB bounds and site configuration are unchanged. The
 underlying site's authorization failure is unconfirmed. Small private live
 evidence is in `build/oct26-scheduler-authorization-recovery-result.json`.
 
+### ClassAd negotiation disconnect, 2026-10-26 17:02 UTC
+
+An independent read-only query observed
+`SECMAN:2007:Failed to end classad message.` while the controller safely retried
+the preceding negotiation failures. [HTCondor's implementation](https://github.com/htcondor/htcondor/blob/main/src/condor_io/condor_secman.cpp#L1852)
+reports this exact diagnostic when ending the TCP authentication message fails.
+Only that complete line was added to the shared query retry classifier; mixed
+authentication, permission, I/O and unknown errors remain fatal. The new case
+failed before the change; all 44 pipeline, monitor and hourly tests then passed,
+including partial-response rejection, pre-mutation proof and recovery ordering.
+
+The controller's callers run this classifier only in newly invoked remote
+helpers. Deploying the tested `preserve.py` therefore needs no local controller
+restart or transfer interruption. There is no site/security configuration change
+or new input gap. Run76074 published during the check and independently passed
+all 41 artifact hashes (39 ROOT outputs), totaling 8,319,050,551 bytes, with
+624 processed inputs and four previously recorded missing minis out of 628
+expected inputs. The archive reached 3,427 runs and 8,910,712,127,485 artifact
+bytes. Private live query, deployment and preservation evidence is updated in
+`build/hourly-recovery/owner-check-result.json`.
+
 ### Second reboot, 2026-10-19 07:56 UTC
 
 Both preceding boots logged NVIDIA Xid 79 (GPU lost from the PCIe bus),

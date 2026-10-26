@@ -665,6 +665,7 @@ def scheduler_jobs(stage_root):
         diagnostics = [line.strip() for line in result.stderr.splitlines() if line.strip()]
         read_failures = (
             "SECMAN:2007:Read failure during security negotiation.",
+            "SECMAN:2007:Failed to end classad message.",
             "SECMAN:2011:Connection closed during command authorization. Probably due to an unknown command.",
         )
         transient = bool(diagnostics) and all(

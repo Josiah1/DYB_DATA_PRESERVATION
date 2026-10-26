@@ -11,22 +11,30 @@ import preserve
 
 
 class PipelineTests(unittest.TestCase):
-    def test_command_authorization_disconnect_leaves_queue_unknown(self):
-        message = ('SECMAN:2011:Connection closed during command authorization. '
-                   'Probably due to an unknown command.')
-        diagnostic = '-- Failed to fetch ads from: schedd12\n' + message + '\n'
-        for returncode in (0, 1):
-            response = mock.Mock(returncode=returncode, stdout='[{"partial": true}]', stderr=diagnostic)
-            with self.subTest(returncode=returncode), \
-                    mock.patch('preserve.subprocess.run', return_value=response) as query:
-                with self.assertRaises(preserve.SchedulerQueryUnavailable) as error:
-                    preserve.scheduler_jobs('/stage')
-                self.assertIn(message, str(error.exception))
-                self.assertEqual(query.call_args.args[0][:2], ['condor_q', '-global'])
-        for stderr in (diagnostic + 'Input/output error\n', diagnostic + 'Permission denied\n',
-                       diagnostic + 'Unknown scheduler failure\n',
-                       diagnostic.replace('Connection closed', 'Authorization denied'),
-                       'SECMAN:2011:unknown command\n'):
+    def test_known_query_disconnects_leave_queue_unknown(self):
+        messages = ('SECMAN:2011:Connection closed during command authorization. '
+                    'Probably due to an unknown command.',
+                    'SECMAN:2007:Failed to end classad message.')
+        for message in messages:
+            diagnostic = '-- Failed to fetch ads from: schedd12\n' + message + '\n'
+            for returncode in (0, 1):
+                response = mock.Mock(returncode=returncode, stdout='[{"partial": true}]', stderr=diagnostic)
+                with self.subTest(message=message, returncode=returncode), \
+                        mock.patch('preserve.subprocess.run', return_value=response) as query:
+                    with self.assertRaises(preserve.SchedulerQueryUnavailable) as error:
+                        preserve.scheduler_jobs('/stage')
+                    self.assertIn(message, str(error.exception))
+                    self.assertEqual(query.call_args.args[0][:2], ['condor_q', '-global'])
+            for extra in ('Input/output error', 'Permission denied', 'Unknown scheduler failure',
+                          'AUTHENTICATE:1004:Failed to authenticate'):
+                response = mock.Mock(returncode=1, stdout='', stderr=diagnostic + extra + '\n')
+                with self.subTest(message=message, extra=extra), \
+                        mock.patch('preserve.subprocess.run', return_value=response):
+                    with self.assertRaises(RuntimeError) as error:
+                        preserve.scheduler_jobs('/stage')
+                    self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
+        for stderr in ('SECMAN:2011:Authorization denied during command authorization.\n',
+                       'SECMAN:2011:unknown command\n', 'SECMAN:2007:Failed to end classad message\n'):
             response = mock.Mock(returncode=1, stdout='', stderr=stderr)
             with self.subTest(stderr=stderr), mock.patch('preserve.subprocess.run', return_value=response):
                 with self.assertRaises(RuntimeError) as error:
@@ -86,8 +94,7 @@ class PipelineTests(unittest.TestCase):
                 with self.assertRaises(preserve.SchedulerQueryUnavailable if isinstance(error, preserve.subprocess.TimeoutExpired)
                                        else OSError):
                     preserve.scheduler_jobs('/stage')
-        message = ('SECMAN:2011:Connection closed during command authorization. '
-                   'Probably due to an unknown command.')
+        message = 'SECMAN:2007:Failed to end classad message.'
         for command, helper, extra in (
                 ('_pool', 'pool_status', []),
                 ('_submit', 'submit_run', ['--run-dir', '/stage/run', '--group', 'dyw',
@@ -330,8 +337,7 @@ class PipelineTests(unittest.TestCase):
                                     self.assertEqual(connection.call_count, 3)
                         diagnostic = ('-- Failed to fetch ads from: schedd12\n' +
                             ('SECMAN:2007:Read failure during security negotiation.' if queries[0] == 1 else
-                             'SECMAN:2011:Connection closed during command authorization. '
-                             'Probably due to an unknown command.'))
+                             'SECMAN:2007:Failed to end classad message.'))
                         response = mock.Mock(returncode=0, stdout='[{"partial": true}]', stderr=diagnostic)
                         with mock.patch('preserve.subprocess.run', return_value=response), \
                                 self.assertRaises(preserve.SchedulerQueryUnavailable) as failure:
