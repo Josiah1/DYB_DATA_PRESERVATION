@@ -195,6 +195,35 @@ class HourlyRecoveryTests(unittest.TestCase):
         for call in daemon.call_args_list:
             self.assertEqual(call.args[0][1:], ["app-server", "daemon", "version"])
 
+    def test_failed_owner_reconciles_then_retries_without_replacement_or_duplicate(self):
+        thread = dict(id=self.config["thread_id"], cwd=str(hourly.PROJECT), status=dict(type="systemError"),
+                      modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="max")
+        entries = []
+        def rpc(method, **params):
+            if method == "thread/read":
+                return dict(thread=thread)
+            self.assertEqual(method, "thread/queue/list")
+            return dict(data=list(entries))
+        def enqueue(argv, **kwargs):
+            self.assertEqual(argv[argv.index("--thread") + 1], self.config["thread_id"])
+            entries.append(dict(id="retry", input=[dict(type="text", text=argv[-1])]))
+            thread["status"]["type"] = "active"
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        self.report["alert"] = None
+        self.state["request"] = dict(phase="accepted")
+        with mock.patch.object(hourly.subprocess, "check_output",
+                               return_value=json.dumps(dict(status="running", socketPath="/current.sock"))), \
+                mock.patch.object(hourly.NativeOwner, "rpc", side_effect=rpc), \
+                mock.patch.object(hourly.subprocess, "run", side_effect=enqueue) as queue:
+            self.assertEqual(hourly.dispatch(self.report, self.config, self.state, lambda _: None),
+                             "healthy_cancelled_pending")
+            self.assertIsNone(self.state["request"])
+            queue.assert_not_called()
+            self.report["alert"] = "Controller stopped again"
+            self.assertEqual(hourly.dispatch(self.report, self.config, self.state, lambda _: None), "requested")
+            self.assertEqual(hourly.dispatch(self.report, self.config, self.state, lambda _: None), "already_queued")
+            queue.assert_called_once()
+
     def test_unloaded_owner_clears_finished_request_without_resume_or_new_message(self):
         thread = dict(id=self.config["thread_id"], cwd=str(hourly.PROJECT), status=dict(type="notLoaded"),
                       modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="max")
@@ -275,7 +304,8 @@ class HourlyRecoveryTests(unittest.TestCase):
         for thread in (
                 dict(id="different", cwd=str(hourly.PROJECT), status=dict(type="active"), modelProvider="openai"),
                 dict(id="existing-owner", cwd="/tmp", status=dict(type="active"), modelProvider="openai"),
-                dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="systemError"), modelProvider="openai"),
+                dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="unknown"),
+                     modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="max"),
                 dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="idle"),
                      modelProvider="openai", model="fallback", reasoningEffort="max"),
                 dict(id="existing-owner", cwd=str(hourly.PROJECT), status=dict(type="idle"),

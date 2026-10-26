@@ -1451,3 +1451,17 @@ probe then resumed that exact owner, received its expected reply and completed
 with an empty queue. The campaign controller kept the same PID throughout.
 Private evidence is
 `~/.home-agent/state/diagnostics/dyb-hourly-reconnect-20261020.json`.
+
+### Recovery owner after a model-capacity failure, 2026-10-26
+
+An hourly recovery turn ended with `serverOverloaded` and the message
+`Selected model is at capacity`. The original conversation retained the correct
+identity, project, provider and gpt-6.1-sol/max settings, but its native status
+became `systemError`. Rejecting that status as an identity mismatch prevented
+the checker from clearing the completed request after the campaign recovered.
+The helper now accepts this inactive state while preserving every identity and
+settings check. A healthy campaign clears the stale request without another
+model call; a later campaign fault can queue one request to the same owner,
+with the existing deduplication and hourly schedule. This does not resolve
+provider capacity, change the model, create another owner, or restart jobs.
+The regression covers healthy reconciliation followed by one deduplicated retry.

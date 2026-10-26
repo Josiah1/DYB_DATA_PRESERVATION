@@ -38,7 +38,7 @@ class NativeOwner:
     def refresh(self):
         thread = self.rpc("thread/read", includeTurns=False)["thread"]
         if (thread["id"] != self.thread_id or Path(thread["cwd"]).resolve() != PROJECT or
-                thread["status"]["type"] not in ("active", "idle", "notLoaded") or
+                thread["status"]["type"] not in ("active", "idle", "notLoaded", "systemError") or
                 thread["modelProvider"] != "openai" or thread.get("model") != "gpt-6.1-sol" or
                 thread.get("reasoningEffort") != "max"):
             raise RuntimeError("authorized conversation identity/settings mismatch; no new writer started")
