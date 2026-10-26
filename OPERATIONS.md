@@ -1400,6 +1400,33 @@ for. The controller logged verification before removing transferred staging.
 Both monitoring timers remained enabled. Small private runtime evidence is in
 `build/oct26-reboot-recovery-result.json`; no full-archive rehash was performed.
 
+### Scheduler authorization disconnect, 2026-10-26 12:53 UTC
+
+A global read-only `condor_q` query repeatedly returned the exact diagnostic
+`SECMAN:2011:Connection closed during command authorization. Probably due to an unknown command.`
+The existing retry path handled the preceding SECMAN:2007 faults but treated
+this connection closure as fatal. The archive baseline was 3,417 finalized runs,
+637,540 processed minis, 3,130 missing and 1,730 broken skips, and
+8,876,098,986,900 artifact bytes. Run75802 had published during shutdown;
+its uncleaned staging remains subject to the normal verification/writer guards.
+
+The shared scheduler-query classifier now accepts only that additional exact
+diagnostic alongside the existing allowed read-failure lines. This covers
+`_pool` and the proved pre-mutation queries in `_submit` and `_skip_broken`.
+Mixed I/O, permission and unknown errors remain fatal. No failed or partial
+global response is an empty queue: submissions and cleanup pause, the heartbeat
+reports degraded state, and the existing 60-second retry resumes work only after
+a successful fresh query. SSH loss during a mutation remains ambiguous.
+
+The new regression failed before the change and passed afterward. All 18
+pipeline and 26 monitor/hourly checks passed, including repeated failures with
+a completed transfer retained until query recovery, unchanged pending state,
+and rejection of mixed errors. Compilation and whitespace checks passed.
+Only `preserve.py` requires deployment; the worker, converter, input policy,
+selection, 300-job/400-GiB bounds and site configuration are unchanged. The
+underlying site's authorization failure is unconfirmed. Small private live
+evidence is in `build/oct26-scheduler-authorization-recovery-result.json`.
+
 ### Second reboot, 2026-10-19 07:56 UTC
 
 Both preceding boots logged NVIDIA Xid 79 (GPU lost from the PCIe bus),

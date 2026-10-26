@@ -663,9 +663,12 @@ def scheduler_jobs(stage_root):
         raise SchedulerQueryUnavailable("read-only condor_q query timed out after 60 seconds") from error
     if result.returncode or result.stderr.strip():
         diagnostics = [line.strip() for line in result.stderr.splitlines() if line.strip()]
-        read_failure = "SECMAN:2007:Read failure during security negotiation."
+        read_failures = (
+            "SECMAN:2007:Read failure during security negotiation.",
+            "SECMAN:2011:Connection closed during command authorization. Probably due to an unknown command.",
+        )
         transient = bool(diagnostics) and all(
-            line == read_failure or line.startswith("-- Failed to fetch ads from:") for line in diagnostics)
+            line in read_failures or line.startswith("-- Failed to fetch ads from:") for line in diagnostics)
         error_type = SchedulerQueryUnavailable if transient else RuntimeError
         raise error_type("scheduler query failed ({}):\nstdout:\n{}\nstderr:\n{}".format(
             result.returncode, result.stdout, result.stderr))

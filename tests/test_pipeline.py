@@ -11,6 +11,28 @@ import preserve
 
 
 class PipelineTests(unittest.TestCase):
+    def test_command_authorization_disconnect_leaves_queue_unknown(self):
+        message = ('SECMAN:2011:Connection closed during command authorization. '
+                   'Probably due to an unknown command.')
+        diagnostic = '-- Failed to fetch ads from: schedd12\n' + message + '\n'
+        for returncode in (0, 1):
+            response = mock.Mock(returncode=returncode, stdout='[{"partial": true}]', stderr=diagnostic)
+            with self.subTest(returncode=returncode), \
+                    mock.patch('preserve.subprocess.run', return_value=response) as query:
+                with self.assertRaises(preserve.SchedulerQueryUnavailable) as error:
+                    preserve.scheduler_jobs('/stage')
+                self.assertIn(message, str(error.exception))
+                self.assertEqual(query.call_args.args[0][:2], ['condor_q', '-global'])
+        for stderr in (diagnostic + 'Input/output error\n', diagnostic + 'Permission denied\n',
+                       diagnostic + 'Unknown scheduler failure\n',
+                       diagnostic.replace('Connection closed', 'Authorization denied'),
+                       'SECMAN:2011:unknown command\n'):
+            response = mock.Mock(returncode=1, stdout='', stderr=stderr)
+            with self.subTest(stderr=stderr), mock.patch('preserve.subprocess.run', return_value=response):
+                with self.assertRaises(RuntimeError) as error:
+                    preserve.scheduler_jobs('/stage')
+                self.assertNotIsInstance(error.exception, preserve.SchedulerQueryUnavailable)
+
     def test_bare_ad_fetch_failure_preserves_submission_state_before_mutation(self):
         diagnostic = ('\n-- Failed to fetch ads from: <192.168.51.62:9618?'
                       'alias=schedd06.ihep.ac.cn> : schedd06.ihep.ac.cn\n\n')
@@ -64,6 +86,8 @@ class PipelineTests(unittest.TestCase):
                 with self.assertRaises(preserve.SchedulerQueryUnavailable if isinstance(error, preserve.subprocess.TimeoutExpired)
                                        else OSError):
                     preserve.scheduler_jobs('/stage')
+        message = ('SECMAN:2011:Connection closed during command authorization. '
+                   'Probably due to an unknown command.')
         for command, helper, extra in (
                 ('_pool', 'pool_status', []),
                 ('_submit', 'submit_run', ['--run-dir', '/stage/run', '--group', 'dyw',
@@ -304,7 +328,15 @@ class PipelineTests(unittest.TestCase):
                                     return read_snapshot(alias, code, arguments)
                                 finally:
                                     self.assertEqual(connection.call_count, 3)
-                        proof = dict(scheduler_unavailable='SECMAN:2007 read failure',
+                        diagnostic = ('-- Failed to fetch ads from: schedd12\n' +
+                            ('SECMAN:2007:Read failure during security negotiation.' if queries[0] == 1 else
+                             'SECMAN:2011:Connection closed during command authorization. '
+                             'Probably due to an unknown command.'))
+                        response = mock.Mock(returncode=0, stdout='[{"partial": true}]', stderr=diagnostic)
+                        with mock.patch('preserve.subprocess.run', return_value=response), \
+                                self.assertRaises(preserve.SchedulerQueryUnavailable) as failure:
+                            preserve.scheduler_jobs('/stage')
+                        proof = dict(scheduler_unavailable=str(failure.exception),
                                      command='_pool', phase='read_only')
                         warning = '/dybfs2/users/lijj16/Libs/root-6.32.08-install/bin/thisroot.csh: No such file or directory.\n'
                         response = mock.Mock(returncode=75, stdout=json.dumps(proof), stderr=warning * 2)
