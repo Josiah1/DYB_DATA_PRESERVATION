@@ -1448,6 +1448,38 @@ expected inputs. The archive reached 3,427 runs and 8,910,712,127,485 artifact
 bytes. Private live query, deployment and preservation evidence is updated in
 `build/hourly-recovery/owner-check-result.json`.
 
+### Resumable transfer disconnect, 2026-10-27
+
+Run77914's transfer lost its SSH connection during the first attempt, and both
+remaining bounded attempts failed with exit 255 before receiving data. The
+controller stopped at 02:03:26 UTC; 3,855,720,540 bytes remained in its portable
+incoming tree. This was a transport failure, with no new missing/broken input
+classification. The original errors and partial-copy metadata were preserved.
+
+At 06:28 UTC a successful independent global query found zero jobs, no unresolved
+intents and 123 COMPLETE staged runs, reserving 411,680,744,692 bytes within the
+400-GiB limit. The expected UUID was read-write through NTFS-3G. Run77914's fixed
+catalog, checksum manifest, completion marker and exact existing gap evidence
+matched the retained incoming metadata: 319 expected inputs, 318 processed and
+one previously confirmed missing mini. The existing single service started at
+06:30:25 UTC, retaining the partial copy and reconciling staged work.
+
+No production code or deployment changed; the existing focused transfer test
+passed its partial-reuse, retry-exhaustion, mount-change, fatal-error and
+verification-before-publication checks. Small private runtime evidence is
+`build/oct27-transfer-recovery-result.json`.
+
+Reconciliation finished at approximately 06:43 UTC, followed by a fresh
+error-free heartbeat and resumed transfer. All 11 newly admitted single-core
+jobs in run75895 (cluster82868971) were running at 06:44:25 UTC, with growing
+worker output. Run77914 published and independently passed all 22 artifact
+hashes, 20 ROOT outputs and 318 duration rows at 06:45 UTC: 4,294,677,390 bytes.
+Its static manifest/catalog/completion hashes and existing missing-file record
+were unchanged. The controller logged verification before deleting that run's
+staging. The archive reached 3,469 runs; the checker cleared, admission remained
+enabled within the existing storage budget, and both monitor timers stayed
+enabled. No full-archive rehash or extra ROOT decode was performed.
+
 ### Second reboot, 2026-10-19 07:56 UTC
 
 Both preceding boots logged NVIDIA Xid 79 (GPU lost from the PCIe bus),
