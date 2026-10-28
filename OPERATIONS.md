@@ -1480,6 +1480,36 @@ staging. The archive reached 3,469 runs; the checker cleared, admission remained
 enabled within the existing storage budget, and both monitor timers stayed
 enabled. No full-archive rehash or extra ROOT decode was performed.
 
+### Overdue worker inspection and relocation, 2026-10-28
+
+The healthy controller reported job82883191.42 in P20A/EH2/run80488 overdue.
+Its 46 other chunks were verified. The remaining job reported zero scheduler
+CPU after more than two hours, with empty scheduler stdout/stderr and no worker
+logs, marker or output. SSH to its execute node timed out; the deeper cause
+was unconfirmed. Global scheduler queries succeeded, with no unresolved intent.
+
+Original job attributes, the exact 16-mini chunk list, empty-log metadata and
+230 fingerprints across the 46 good chunks were preserved before recovery.
+The live schedd advert established its full name as
+`scheduler@schedd06.ihep.ac.cn`; an initial hostname-only query was refused
+before any recovery action. At 15:10:12 UTC, one specifically targeted
+`condor_vacate_job -name scheduler@schedd06.ihep.ac.cn 82883191.42` succeeded.
+This used [HTCondor's graceful vacation](https://htcondor.readthedocs.io/en/24.0/man-pages/condor_vacate_job.html):
+the existing queue entry was retained for scheduler-managed relocation.
+There was no forced removal, new array submission, controller restart or
+production code change.
+
+The same job started its worker on a different node at 15:11:03 UTC, and its
+partial converter output grew from 898 to 55,981,472 bytes by 15:12:40 UTC.
+All 230 original good fingerprints and the single original submission receipt
+were unchanged. All 750 expected inputs remained accounted for with no gaps:
+734 in the good chunks and 16 in the still-pending chunk. Its original timeout clock and overdue
+warning remained until completion, while independent transfers continued.
+Run78869 independently passed all three artifact hashes (489,383,467 bytes).
+Evidence is in portable `provenance/worker-recovery-run80488.json` and private
+`build/oct28-overdue-recovery-result.json`. No full-archive rehash or repeated
+ROOT decode was performed.
+
 ### Second reboot, 2026-10-19 07:56 UTC
 
 Both preceding boots logged NVIDIA Xid 79 (GPU lost from the PCIe bus),
