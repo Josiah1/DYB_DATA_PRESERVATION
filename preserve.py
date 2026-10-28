@@ -1796,7 +1796,8 @@ def refresh_pending_holds(local_root, held, active, automatic, new_run_admission
         entry = dict(previous.get(key, {}))
         entry.update(run=key, catalog=marker["catalog"], catalog_sha256=marker["catalog_sha256"],
                      input_count=marker["input_count"], pending_input_count=marker["input_count"],
-                     status=run["status"], automatic=key in automatic or entry.get("automatic", False))
+                     status=run["status"], staging_present=run["status"]["state"] != "UNPREPARED",
+                     automatic=key in automatic or entry.get("automatic", False))
         entries.append(entry)
         for issue in automatic.get(key, {}).get("issues", []):
             identity = (issue["period"], issue["hall"], issue["run"], issue["catalog_index"])
@@ -2279,12 +2280,15 @@ def run_pipeline(args, selected, snapshot, local_root):
                     directories = {r["marker"]["run_dir"] for r in pool["runs"]}
                     if any(j["Iwd"] not in directories for j in pool["jobs"]):
                         raise RuntimeError("queued campaign job has no matching staged run; refusing new submissions")
-                    if held - set(active):
-                        raise RuntimeError("held run has no retained staging: " + ", ".join(sorted(held - set(active))))
+                    if held - set(active) - explicit_holds:
+                        raise RuntimeError("held run has no retained staging: " + ", ".join(sorted(held - set(active) - explicit_holds)))
+                    # An explicit hold may precede preparation; never fabricate staging or input gaps for it.
+                    held_records = {key: active.get(key, dict(marker=expected[key], status=dict(
+                        state="UNPREPARED", chunks=0, ok=0, failed=0, running=0))) for key in held}
                     if held or (args.skip_broken_minis and pending_path.exists()):
-                        refresh_pending_holds(local_root, held, active, automatic, not args.drain_staging, args.skip_broken_minis)
+                        refresh_pending_holds(local_root, held, held_records, automatic, not args.drain_staging, args.skip_broken_minis)
 
-                    pending = [r for key, r in expected.items() if key not in done and key not in active]
+                    pending = [r for key, r in expected.items() if key not in done and key not in active and key not in held]
                     overdue = []
                     exhausted_pending = {}
                     for key, run in active.items():
@@ -2317,12 +2321,15 @@ def run_pipeline(args, selected, snapshot, local_root):
                                   exhausted_pending_runs=list(exhausted_pending.values()),
                                   pending_content_checks=sorted(rechecking),
                                   startup_recovery_pending=list(startup_pending.values()),
-                                  held_runs=[dict(run=key, catalog_sha256=active[key]["marker"]["catalog_sha256"],
-                                                  status=active[key]["status"],
-                                                  reason="operator hold for existing mini content errors; inputs remain pending")
+                                  held_runs=[dict(run=key, catalog_sha256=held_records[key]["marker"]["catalog_sha256"],
+                                                  status=held_records[key]["status"], staging_present=key in active,
+                                                  pending_input_count=held_records[key]["marker"]["input_count"],
+                                                  reason="operator hold for input investigation; full catalog inputs remain pending")
                                              for key in sorted(held)])
                     atomic_json(state_path, report)
                     if not active and (not pending or args.drain_staging):
+                        if held:
+                            raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
                         break
 
                     submitted = False
@@ -2384,7 +2391,7 @@ def run_pipeline(args, selected, snapshot, local_root):
                             break  # Refresh real queue counts before another submission.
                     if submitted:
                         continue
-                    if active.keys() == held and not rechecking and (not pending or args.drain_staging):
+                    if set(active) <= held and not rechecking and (not pending or args.drain_staging):
                         raise RuntimeError("only held incomplete runs remain: " + ", ".join(sorted(held)))
                     if any(r["status"]["failed"] for key, r in active.items()
                            if key not in held and key not in rechecking and key not in startup_pending):
@@ -2472,7 +2479,7 @@ def build_parser():
     run.add_argument("--hall", action="append", choices=("EH1", "EH2", "EH3"))
     run.add_argument("--run-pattern")
     run.add_argument("--hold-run", action="append", default=[], metavar="PERIOD/HALL/RUN",
-                     help="retain an incomplete staged run for input repair; never submit, finalize, or clean it")
+                     help="retain an incomplete catalog run pending input investigation; never prepare, submit, finalize, or clean it")
     run.add_argument("--hold-empty-minis", action="store_true",
                      help="hold runs with independently verified empty AdEnergy-only minis; inputs remain pending")
     run.add_argument("--drain-staging", action="store_true",

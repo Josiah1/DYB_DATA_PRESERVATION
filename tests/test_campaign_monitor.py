@@ -152,6 +152,23 @@ class CampaignMonitorTests(unittest.TestCase):
         controller['error'] = 'checksum mismatch'
         self.assertIn('checksum mismatch', status_record(progress, service, {}, 100, controller)['alert'])
 
+    def test_unprepared_input_hold_warns_until_released_without_claiming_content_errors(self):
+        progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=1, skipped_inputs=0)
+        service = dict(ActiveState='active', InvocationID='one')
+        controller = dict(heartbeat_time=100, max_jobs=300, max_staged_bytes=400,
+                          held_runs=[dict(run='P20A/EH3/run79938', staging_present=False,
+                                          status=dict(state='UNPREPARED'))], queue=dict(held=0), new_run_admission=True)
+        report = status_record(progress, service, {}, 100, controller)
+        self.assertIsNone(report['alert'])
+        self.assertIn('run79938', report['warning'])
+        self.assertNotIn('content errors', report['warning'])
+        self.assertNotIn('admission paused', report['warning'])
+        self.assertEqual((report['pending_inputs'], report['skipped_inputs']), (1, 0))
+        controller['error'] = 'Input/output error'
+        self.assertIn('Input/output error', status_record(progress, service, {}, 100, controller)['alert'])
+        controller.update(error=None, held_runs=[])
+        self.assertIsNone(status_record(progress, service, {}, 100, controller)['warning'])
+
     def test_known_input_hold_warns_without_hiding_service_or_scheduler_failure(self):
         progress = dict(finished=False, complete=False, artifact_bytes=100, pending_inputs=2, skipped_inputs=0)
         service = dict(ActiveState='active', InvocationID='one')

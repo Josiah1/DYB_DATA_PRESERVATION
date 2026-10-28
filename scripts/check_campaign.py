@@ -38,7 +38,7 @@ def status_record(progress, service, previous, now, controller=None):
         elif (controller.get("reserved_bytes") or 0) > controller["max_staged_bytes"]:
             alert = "Staging reservation budget exceeded; inspect storage"
     held = (controller or {}).get("held_runs", [])
-    warning = ("Existing mini content errors remain pending in held runs: " +
+    warning = ("Input investigation remains pending in held runs: " +
                ", ".join(r["run"] for r in held)) if held else None
     unavailable = (controller or {}).get("scheduler_status") == "unavailable"
     if unavailable:

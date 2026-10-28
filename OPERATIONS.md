@@ -1587,3 +1587,46 @@ model call; a later campaign fault can queue one request to the same owner,
 with the existing deduplication and hourly schedule. This does not resolve
 provider capacity, change the model, create another owner, or restart jobs.
 The regression covers healthy reconciliation followed by one deduplicated retry.
+
+### Unprepared single-input run held for investigation, 2026-10-28
+
+At 19:58 UTC, preparation of `P20A/EH3/run79938` stopped because its only
+catalogued mini was unavailable. The fixed catalog SHA256 is
+`f4cbedef1263ccf4096e442e2bbd1a0c0cd3860a680660de07ffa5a05c64f67e`.
+The 20:06 UTC read-only inspection reproduced two ENOENT observations for
+`All-mini/runs_0079000/runs_0079900/run_0079938/minirecon.Neutrino.0079938.Physics.EH3-Merged.P20A-I._0001.root`;
+the run directory itself was absent, while the parent directories and minis
+from adjacent catalog runs79931 and79941 were readable. No original
+reconstruction was opened. The successful global scheduler query found no
+jobs, unresolved intents or staging for run79938; the other 74 staged runs
+were COMPLETE. The old controller was still allowing its run80442 transfer
+to finish after recording the preparation failure.
+
+The all-missing-run and storage-outage guards remain unchanged. The explicit
+`--hold-run` control now also accepts an unprepared fixed-catalog run: its
+status is `UNPREPARED`, `staging_present` is false, and every expected input
+remains pending. No fake remote staging, gaps, chunk outputs or completed
+run are created. Only named operator holds permit absent staging; automatic
+holds still require retained staging, and an unmatched scheduler writer is
+fatal. Unaffected admissions, retries and verified transfers can continue.
+The controller and pending-input ledger expose the hold; the monitor uses
+an input-investigation warning rather than claiming a ROOT-content error.
+When only held work remains, the controller stops visibly instead of
+declaring the full campaign complete.
+
+The private service override adds only `--hold-run P20A/EH3/run79938` to the
+existing campaign command. Remove that argument after a fresh source check
+and a safe controller handoff to retry the unchanged catalog. Observation
+proof is retained on the portable disk at
+`provenance/preparation-holds/P20A/EH3/run79938.json`, separately from missing
+and broken skip exports. Its one input has not been committed as a gap.
+
+The four focused checks passed, followed by the existing pipeline,
+preservation, monitor, hourly, broken-mini, content-hold and startup suites:
+78 tests, 76 passed and two supported-LCG-runtime skips. The regression puts
+the unprepared hold before a completed transfer and a new admission,
+requires verification before cleanup, retains full-catalog accounting and
+rejects a scheduler writer without matching staging. The single-input
+all-missing guard and monitor warning/recovery are checked explicitly.
+Compact live recovery evidence is in ignored
+`build/oct28-preparation-recovery-result.json`.

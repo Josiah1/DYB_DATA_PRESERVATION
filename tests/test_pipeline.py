@@ -1042,6 +1042,100 @@ class PipelineTests(unittest.TestCase):
             self.assertIn(marker['run_dir'], staged)
             self.assertIn('read-only status failed', preserve.load_json(root / 'provenance/controller.json')['error'])
 
+    def test_unprepared_explicit_hold_preserves_catalog_and_allows_admission_and_verified_transfers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            local = root / 'data'
+            local.mkdir()
+            (root / 'provenance').mkdir()
+            records = [dict(period='P20A', hall='EH3', stem='run' + str(n),
+                            catalog='/catalog/run{}.list'.format(n), catalog_sha256=str(n), input_count=1)
+                       for n in (79938, 79939, 79940)]
+            for record in records:
+                backup = root / 'catalogs/P20A/EH3' / (record['stem'] + '.list')
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                backup.write_text('/tiny/input.root\n')
+
+            def staged_run(record, complete):
+                marker = dict(record, run_dir='/stage/' + record['stem'], code_root='/code', chunk_count=1,
+                              files_per_job=1, selection=preserve.selection_record('on'),
+                              input_source='mini', skip_missing_minis=True)
+                return dict(marker=marker, intent=False, submissions=[], status=dict(
+                    state='COMPLETE' if complete else 'PENDING', ok=int(complete), failed=0, running=0, chunks=1))
+
+            staged = {'run79939': staged_run(records[1], True)}
+            args = preserve.build_parser().parse_args([
+                'run', '--local-root', str(local), '--mount-root', str(root),
+                '--remote-stage-root', '/stage', '--remote-code-root', '/code', '--files-per-job', '1',
+                '--skip-missing-minis', '--skip-broken-minis', '--ad-selection', 'on',
+                '--delete-remote-after-sync', '--hold-run', 'P20A/EH3/run79938'])
+            args.poll_seconds = 0.001
+            prepared, submitted, verified, cleaned = [], [], set(), []
+
+            def remote(alias, code, arguments):
+                command = arguments[0]
+                if command == '_pool':
+                    return copy.deepcopy(dict(runs=list(staged.values()), jobs=[], queue=preserve.queue_counts([]),
+                        reserved_bytes=preserve.GIB, output_bytes=10,
+                        quota=dict(free_bytes=500 * preserve.GIB, used_files=10, limit_files=200000))), 0
+                if command == '_prepare':
+                    catalog = arguments[arguments.index('--catalog') + 1]
+                    self.assertEqual(catalog, records[2]['catalog'], 'never probe or prepare the held catalog')
+                    prepared.append(Path(catalog).stem)
+                    staged['run79940'] = staged_run(records[2], False)
+                    return staged['run79940']['marker'], 0
+                stem = Path(arguments[arguments.index('--run-dir') + 1]).name
+                self.assertNotEqual(stem, 'run79938')
+                if command == '_submit':
+                    self.assertEqual(stem, 'run79940')
+                    submitted.append(stem)
+                    staged[stem]['status'].update(state='COMPLETE', ok=1)
+                    return dict(cluster_id=20000), 0
+                if command == '_finalize':
+                    return staged[stem]['marker'], 0
+                self.assertEqual(command, '_cleanup')
+                self.assertIn(stem, verified, 'cleanup requires a verified transfer')
+                cleaned.append(stem)
+                del staged[stem]
+                return dict(deleted=stem), 0
+
+            def sync(alias, marker, *unused):
+                verified.add(marker['stem'])
+                return dict(files=1, bytes=10, directory=marker['run_dir'])
+
+            with mock.patch('preserve.CATALOG_BACKUP_ROOT', root / 'catalogs'), \
+                    mock.patch('preserve.remote_json', side_effect=remote), \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])), \
+                    mock.patch('preserve.recorded_inputs'), mock.patch('preserve.refresh_input_issues'), \
+                    mock.patch('preserve.validate_local_mount'), mock.patch('preserve.sync_run', side_effect=sync):
+                with self.assertRaisesRegex(RuntimeError, 'only held incomplete runs remain'):
+                    preserve.run_pipeline(args, records, {}, local)
+            self.assertEqual(prepared, ['run79940'])
+            self.assertEqual(submitted, ['run79940'])
+            self.assertEqual(set(cleaned), {'run79939', 'run79940'})
+            state = preserve.load_json(root / 'provenance/controller.json')
+            hold = state['held_runs'][0]
+            self.assertEqual((hold['run'], hold['status']['state'], hold['pending_input_count'],
+                              hold['staging_present']), ('P20A/EH3/run79938', 'UNPREPARED', 1, False))
+            self.assertTrue(state['new_run_admission'])
+            pending = preserve.load_json(root / 'provenance/pending-input-issues.json')
+            self.assertEqual(pending['issues'], [], 'the hold creates no missing or broken skips')
+            self.assertEqual(pending['held_runs'][0]['pending_input_count'], 1)
+            self.assertFalse(pending['held_runs'][0]['staging_present'])
+            self.assertFalse((local / 'P20A/EH3/run79938').exists())
+            preserve.atomic_json(local / 'catalog-inventory.json', dict(records=records))
+            progress, saved = preserve.archive_progress(local)
+            self.assertEqual((progress['expected_runs'], progress['expected_inputs'], progress['pending_inputs']), (3, 3, 3))
+            self.assertEqual((progress['completed_runs'], progress['skipped_inputs'], saved), (0, 0, []))
+
+            orphan = dict(Iwd='/stage/run79938', JobStatus=2, RequestCpus=1)
+            pool = dict(runs=[], jobs=[orphan], queue=preserve.queue_counts([orphan]))
+            with mock.patch('preserve.remote_json', return_value=(pool, 0)) as call, \
+                    mock.patch('preserve.archive_progress', return_value=({}, [])):
+                with self.assertRaisesRegex(RuntimeError, 'job has no matching staged run'):
+                    preserve.run_pipeline(args, records, {}, local)
+            self.assertEqual([c.args[2][0] for c in call.call_args_list], ['_pool'])
+
     def test_explicit_hold_retains_pending_inputs_and_drains_unaffected_retries_and_transfers(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

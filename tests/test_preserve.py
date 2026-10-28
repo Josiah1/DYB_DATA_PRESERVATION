@@ -78,6 +78,8 @@ class PreserveTests(unittest.TestCase):
                     preserve.available_inputs(canonical)
                 for path in minis:
                     Path(path).unlink(missing_ok=True)
+                with self.assertRaisesRegex(ValueError, 'no usable inputs'):
+                    preserve.available_inputs(canonical[:1])
                 with mock.patch('builtins.open', side_effect=mini_only) as opened:
                     with self.assertRaisesRegex(ValueError, 'possible mini storage outage'):
                         preserve.available_inputs(canonical)
