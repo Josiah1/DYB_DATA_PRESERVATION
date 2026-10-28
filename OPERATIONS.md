@@ -1596,7 +1596,7 @@ catalogued mini was unavailable. The fixed catalog SHA256 is
 The 20:06 UTC read-only inspection reproduced two ENOENT observations for
 `All-mini/runs_0079000/runs_0079900/run_0079938/minirecon.Neutrino.0079938.Physics.EH3-Merged.P20A-I._0001.root`;
 the run directory itself was absent, while the parent directories and minis
-from adjacent catalog runs79931 and79941 were readable. No original
+from adjacent catalog runs `run79931` and `run79941` were readable. No original
 reconstruction was opened. The successful global scheduler query found no
 jobs, unresolved intents or staging for run79938; the other 74 staged runs
 were COMPLETE. The old controller was still allowing its run80442 transfer
@@ -1630,3 +1630,29 @@ rejects a scheduler writer without matching staging. The single-input
 all-missing guard and monitor warning/recovery are checked explicitly.
 Compact live recovery evidence is in ignored
 `build/oct28-preparation-recovery-result.json`.
+
+Source commit `4e7b4ec` was deployed by replacing only `preserve.py`; its
+SHA256 is `f54f248f5e42834e3309589080496e5b3dba5bc69a5f62af129033f615083010`.
+All 296 checked staging metadata fingerprints, the worker and the converter
+were unchanged. After the old transfer finished, the single replacement
+controller started at 20:10:44 UTC (Python PID22900, service wrapper22896).
+It adopted all 74 retained staged runs and published a fresh error-free
+heartbeat at 20:18:54 UTC. The hold is recorded as one pending input with
+no staging; new-run admission remains enabled. No job was cancelled or
+replayed and no input gap was created for run79938.
+
+The newly published local run80442 passed independent checksum and metadata
+verification: 25 artifacts, 4,277,061,395 bytes, 354 processed minis and two
+confirmed missing inputs from its unchanged 356-input catalog. The controller
+verified this copy again before cleaning its remote staging. At 20:20:52 UTC,
+the successful global scheduler query showed 29 running single-core jobs,
+one idle job, no held jobs or unresolved intents, and 428,674,897,248 reserved
+bytes, within 400 GiB. Newly admitted runs79943,79985 and80101 had live worker
+markers and growing ROOT partials. Run80447's incoming portable transfer grew
+from 508,417,114 to 944,132,898 bytes between 20:20:50 and 20:21:53 UTC.
+The checker returned exit0 with no alert and the expected run79938 hold warning;
+both existing timers remain enabled. Verified archive totals were 3683 runs,
+703,764 processed inputs, 3466 missing /1730 broken skips and
+9,904,888,443,166 artifact bytes. These are dated observations; use the live
+controller and progress records for newer counters. No full-archive rehash,
+new dependencies, broad source sync or push was performed.
