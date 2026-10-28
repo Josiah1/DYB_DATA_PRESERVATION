@@ -1510,6 +1510,18 @@ Evidence is in portable `provenance/worker-recovery-run80488.json` and private
 `build/oct28-overdue-recovery-result.json`. No full-archive rehash or repeated
 ROOT decode was performed.
 
+The relocated worker finished at 15:17:55 UTC, verifying its 16 minis and
+216,154,250-byte ROOT output (408.252 seconds wall time, 393.181 CPU seconds).
+The 15:18:51 UTC query confirmed run80488 COMPLETE with 47/47 good chunks,
+no failure/running markers or remaining writer job, and all 230 original
+fingerprints unchanged. All 750 expected inputs were verified in staging;
+the original submission and zero-gap accounting were unchanged. Its staged
+data remains pending portable transfer, and the overdue monitor warning cleared.
+There were 45 other single-core jobs running. The portable archive reached
+3,657 finalized runs, with run78980 independently verified across all 21
+artifacts (5,455,560,038 bytes, 291 processed inputs and two recorded missing
+minis). Both monitoring timers and the same controller remained active.
+
 ### Second reboot, 2026-10-19 07:56 UTC
 
 Both preceding boots logged NVIDIA Xid 79 (GPU lost from the PCIe bus),
