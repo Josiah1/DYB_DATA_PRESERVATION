@@ -61,6 +61,12 @@ The October 11 user decision additionally permits independently confirmed
 empty-`AdEnergy`-only minis to be recorded as **broken**, separately from missing
 files. Other content errors remain errors; see [the broken-mini policy](BROKEN_MINIS.md).
 
+The October 30 investigation resolved the single-input `P20A/EH3/run79938`
+as one confirmed missing mini, with zero processed inputs and no ROOT outputs.
+Its exact catalog checksum is individually allowlisted; its checksummed gap
+report includes two ENOENT observations, readable neighboring minis and the
+site's loss-index entry. Automatic preparation still rejects all-missing runs.
+
 The complete catalog stays unchanged. `input_count` is the expected count;
 `processed_input_count + skipped_input_count` must equal it. New broken-gap
 records additionally require `expected = processed + missing_skipped_input_count + broken_skipped_input_count`.

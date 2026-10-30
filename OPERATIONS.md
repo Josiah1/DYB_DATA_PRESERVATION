@@ -1711,3 +1711,50 @@ publication found zero jobs, no unresolved intents and 70 COMPLETE staged runs;
 admission remained enabled with staging reservation backpressure. The checker
 cleared its alert and retained only run79938's pending-input warning. No full
 archive rehash or additional ROOT event decode was performed.
+
+### Resolve run79938 as confirmed source loss, 2026-10-30
+
+The user requested resolution of the pending input investigation. Fresh
+read-only checks found the exact mini absent twice, with the containing run
+directory absent and the first fixed-catalog minis of run79931 and run79941
+readable. A directory search of All-mini found no alternate run79938 directory
+or neighboring copy. The site's September 2 `list/file_lost.txt` explicitly
+contains the exact mini at line 3621; `file_list.txt` has no run79938 entry,
+and `file_status.txt` has the exact mini followed by `00`. This confirms source
+loss rather than a controller, portable-disk indexing, or GPU problem.
+
+Only the original run79938 catalog SHA256
+`f4cbedef1263ccf4096e442e2bbd1a0c0cd3860a680660de07ffa5a05c64f67e`
+is allowlisted for manual missing-only finalization. `finalize_missing_only`
+builds a new local record with **one expected, zero processed, one missing,
+zero broken**, zero chunks and zero ROOT outputs. It refuses other catalogs,
+inconsistent counts, incomplete ENOENT evidence, a mismatched site loss-index
+entry, unreadable neighbors or an existing destination. The gap report hashes
+the source evidence, and verification checks the unchanged catalog and exact
+empty output set. `complete` means accounting finalized; `catalog_complete`
+remains false, and archive completion must remain `finished_with_gaps`.
+Automatic preparation's all-missing and storage-outage guards are unchanged.
+
+The read-only proof and reviewable draft were saved before touching the live
+controller. Publication uses the existing controller lock, a verified atomic
+rename on disk UUID `2A4F48F8BDFEE355`, then removal of the single run79938
+service argument. The preparation-hold evidence remains historical; the new
+resolution is in `provenance/preparation-hold-resolutions/P20A/EH3/run79938.json`
+and the final run's checksummed `input-gaps.json`. No remote converter or worker
+changes are required, and no cluster job is cancelled or replayed.
+
+Validation: all 87 tests completed, 83 passed and four checks requiring the
+configured ROOT/LCG runtime were skipped. The five new tests cover truthful
+zero-output accounting through verification/progress/export, the unchanged
+automatic guard, identity/evidence rejection, checksum corruption, unexpected
+ROOT outputs and preservation of existing destinations. The live resolution
+has no ROOT content to decode; this is an audited omission, not recovered data.
+
+Live publication completed at 12:56:25 UTC and the controller restarted at
+12:56:37 UTC. All 64 retained staged runs were COMPLETE, with zero jobs and no
+unresolved intents at handoff. At 13:05:41 UTC the new heartbeat had no holds
+or error, and the retained run83256 transfer had grown from 6,708,864,704 to
+6,881,093,312 bytes. The 13:06:23 UTC checker reported no alert or warning;
+hourly recovery reported healthy and both timers were active. The archive
+accounted for 3,852 runs, including this explicit missing-only record, with
+766,196 processed inputs, 3,798 missing, 1,730 broken and 59,610 still pending.

@@ -29,6 +29,11 @@ AD_SELECTION_MODES = ("on", "off")
 INPUT_SOURCES = ("mini", "recon", "mini-or-recon")
 DEFAULT_INPUT_SOURCE = "mini"
 MINI_ROOT = "/lustrefs/juno26/dyw/rec/All-mini"
+# Individually investigated source loss, resolved at the user's request on 2026-10-30.
+# This is not permission for automatic preparation to finalize other all-missing runs.
+MISSING_ONLY_CATALOGS = {
+    "P20A/EH3/run79938": "f4cbedef1263ccf4096e442e2bbd1a0c0cd3860a680660de07ffa5a05c64f67e",
+}
 AD_COUNT_COLUMNS = tuple(
     "ad{}{}".format(detector, kind)
     for detector in (1, 2, 3, 4) for kind in ("Below0p3MeV", "From0p3To0p6MeV"))
@@ -244,6 +249,8 @@ def resolve_inputs(paths, source=DEFAULT_INPUT_SOURCE):
 
 
 def recorded_inputs(paths, record):
+    if record.get("missing_only_resolution") is not None or record.get("chunk_count") == 0:
+        validate_missing_only_record(paths, record)
     source = input_source_mode(record)
     if ((record.get("skip_missing_minis") and source != "mini") or
             (record.get("skip_broken_minis") and (source != "mini" or not record.get("skip_missing_minis"))) or
@@ -295,6 +302,47 @@ def recorded_inputs(paths, record):
             record.get("broken_skipped_input_count") != sum(i.get("category") == "broken" for i in skipped)):
         raise ValueError("missing/broken input accounting does not match the catalog")
     return usable
+
+
+def validate_missing_only_record(paths, record):
+    """A reviewed source-loss record has no conversion jobs, events, or ROOT outputs."""
+    key = "/".join(record.get(field, "") for field in ("period", "hall", "stem"))
+    proof = record.get("missing_only_resolution") or {}
+    digest = MISSING_ONLY_CATALOGS.get(key)
+    if (not digest or record.get("catalog_sha256") != digest or len(paths) != 1 or
+            hashlib.sha256((paths[0] + "\n").encode()).hexdigest() != digest or
+            record.get("input_source") != "mini" or not record.get("skip_missing_minis") or
+            record.get("input_count") != 1 or record.get("skipped_input_count") != 1 or
+            record.get("missing_skipped_input_count") != 1 or record.get("catalog_complete") is not False or
+            record.get("complete") is not True or record.get("resolved_inputs") != [None] or
+            any(record.get(field) != 0 for field in ("chunk_count", "processed_input_count",
+                "broken_skipped_input_count", "output_count", "output_bytes", "duration_rows",
+                "source_entries", "source_kept_entries", "source_input_bytes")) or
+            proof.get("kind") != "dyb-reviewed-missing-only-run" or
+            proof.get("catalog_sha256") != digest or proof.get("run") != key):
+        raise ValueError("unreviewed or inconsistent missing-only run resolution")
+    dt.datetime.fromisoformat(proof["checked_at"])
+    mini = resolve_inputs(paths)[0]
+    issues = record.get("skipped_inputs", [])
+    check = proof.get("mini_check", {})
+    attempts = check.get("attempts", [])
+    if (len(issues) != 1 or issues[0].get("category", "missing") != "missing" or
+            issues[0].get("mini_check") != check or issues[0].get("observed_at") != proof["checked_at"] or
+            check.get("path") != mini or check.get("status") != "missing" or len(attempts) != 2 or
+            any(a.get("status") != "missing" or a.get("errno") != errno.ENOENT for a in attempts)):
+        raise ValueError("missing-only resolution requires two exact ENOENT observations")
+    index = proof.get("loss_index", {})
+    if (index.get("path") != str(Path(MINI_ROOT).parent / "list/file_lost.txt") or
+            index.get("matches") != [mini] or not isinstance(index.get("sha256"), str) or
+            not re.fullmatch(r"[0-9a-f]{64}", index["sha256"])):
+        raise ValueError("missing-only resolution lacks exact site loss-index evidence")
+    neighbors = proof.get("neighbors", [])
+    expected_neighbors = {resolve_inputs([paths[0].replace("0079938", number)])[0]
+                          for number in ("0079931", "0079941")}
+    if (len(neighbors) != 2 or {c.get("path") for c in neighbors} != expected_neighbors or
+            any(c.get("status") != "ok" or not c.get("attempts") or
+                c["attempts"][-1].get("status") != "ok" for c in neighbors)):
+        raise ValueError("missing-only resolution lacks readable neighboring minis")
 
 
 def valid_empty_mini_proof(issue):
@@ -388,6 +436,8 @@ def gap_report(record):
     if record.get("skip_broken_minis"):
         result.update({key: record[key] for key in (
             "missing_skipped_input_count", "broken_skipped_input_count", "broken_failure_evidence")})
+    if record.get("missing_only_resolution"):
+        result["missing_only_resolution"] = record["missing_only_resolution"]
     return result
 
 
@@ -1492,6 +1542,51 @@ def deployed_inventory(alias, code_root):
     return records
 
 
+def finalize_missing_only(directory, record, proof):
+    """Build and verify a new local resolution; publishing requires the controller lock."""
+    directory = Path(directory)
+    if directory.exists():
+        raise ValueError("resolution destination already exists")
+    data, source, backup = read_catalog_data(record["period"], record["hall"], record["catalog"])
+    paths = parse_catalog_inputs(data, record["catalog"])
+    if hashlib.sha256(data).hexdigest() != record["catalog_sha256"]:
+        raise ValueError("resolution catalog checksum mismatch")
+    result = dict(record, kind="dyb-preserve-run", schema_version=SCHEMA_VERSION,
+                  created_at=utc_now(), completed_at=utc_now(), complete=True, catalog_complete=False,
+                  catalog_source=source, catalog_backup=backup, run_number=parse_run_number(record["stem"]),
+                  input_source="mini", selection=selection_record("on"), files_per_job=16, chunk_count=0,
+                  skip_missing_minis=True, skip_broken_minis=True, broken_failure_evidence=[],
+                  resolved_inputs=[None], processed_input_count=0, skipped_input_count=1,
+                  missing_skipped_input_count=1, broken_skipped_input_count=0,
+                  skipped_inputs=[dict(catalog_index=0, catalog_entry=paths[0], category="missing",
+                      observed_at=proof["checked_at"], mini_check=proof["mini_check"])],
+                  missing_only_resolution=proof, output_count=0, output_bytes=0, duration_rows=0,
+                  source_entries=0, source_kept_entries=0, source_input_bytes=0,
+                  duration_file="durations.tsv", checksums="SHA256SUMS", reports_with_metrics=0,
+                  metrics={key: 0 for key in ("sources", "entries", "kept_entries", "input_bytes",
+                                            "output_bytes", "wall_seconds", "cpu_seconds")})
+    result["output_prefix"] = "preserved.{:07d}".format(result["run_number"])
+    recorded_inputs(paths, result)  # Validate the exact reviewed identity and evidence before writing.
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=".{}.resolve-".format(directory.name), dir=str(directory.parent)))
+    try:
+        (temporary / "outputs").mkdir()
+        (temporary / "catalog.list").write_bytes(data)
+        atomic_text(temporary / "durations.tsv", "\t".join(DURATION_COLUMNS) + "\n")
+        atomic_json(temporary / "input-gaps.json", gap_report(result))
+        artifacts = [temporary / name for name in ("durations.tsv", "input-gaps.json")]
+        result.update(artifact_count=len(artifacts), artifact_bytes=sum(p.stat().st_size for p in artifacts))
+        atomic_text(temporary / "SHA256SUMS", "".join("{}  {}\n".format(sha256_file(p), p.name) for p in artifacts))
+        atomic_json(temporary / "run.json", result)
+        atomic_text(temporary / ".complete", result["catalog_sha256"] + "\n")
+        verify_local_run(temporary)
+        os.rename(str(temporary), str(directory))
+    finally:
+        if temporary.exists():
+            shutil.rmtree(str(temporary))
+    return result
+
+
 def verify_local_run(directory, root_verifier=None):
     directory = Path(directory).resolve()
     result = load_json(directory / "run.json")
@@ -1505,7 +1600,8 @@ def verify_local_run(directory, root_verifier=None):
         raise ValueError("run.json names unexpected integrity artifacts")
     validate_token(result.get("stem"), "run stem")
     prefix = output_prefix(result)
-    if result.get("chunk_count", 0) <= 0 or result.get("files_per_job", 0) <= 0:
+    if (result.get("chunk_count", 0) < 0 or result.get("files_per_job", 0) <= 0 or
+            (not result.get("chunk_count") and not result.get("missing_only_resolution"))):
         raise ValueError("run.json has invalid chunk sizing")
     catalog = directory / "catalog.list"
     if sha256_file(catalog) != result["catalog_sha256"]:
