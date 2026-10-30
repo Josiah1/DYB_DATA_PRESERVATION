@@ -76,9 +76,10 @@ class NativeOwner:
         self.rpc("thread/queue/delete", queuedSubmissionId=entry["id"])
 
     def enqueue(self, message):
+        # Queue messages inherit the verified thread settings; model overrides are rejected.
         result = subprocess.run([str(CODEX), "queue", "--remote", "unix://" + self.socket,
-            "--thread", self.thread_id, "--model", "gpt-6.1-sol", "-c", 'model_reasoning_effort="max"',
-            "--message", message], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+            "--thread", self.thread_id, "--message", message],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
         if result.returncode:
             raise RuntimeError("native queue failed or delivery uncertain; inspect before any replay: " + result.stderr[-1200:])
         self.ensure_loaded()  # A persisted queue does not run until its existing thread is loaded.

@@ -1656,3 +1656,20 @@ both existing timers remain enabled. Verified archive totals were 3683 runs,
 9,904,888,443,166 artifact bytes. These are dated observations; use the live
 controller and progress records for newer counters. No full-archive rehash,
 new dependencies, broad source sync or push was performed.
+
+### Queue CLI compatibility recovery, 2026-10-30
+
+The campaign stopped at 04:53:56 UTC after its three resumable rsync attempts
+failed on an SSH disconnection. The 05:00 hourly recovery could not deliver
+its request: installed Codex CLI 0.166.0 rejects `codex queue --model` because
+queued messages use the existing thread's model. The original owner was
+unloaded with the expected identity/settings and an empty native queue;
+the local request remained in the `submitting` phase.
+
+The helper now queues against that verified thread without model or effort
+overrides. Its identity/model/effort checks, explicit resume of the same
+owner, uncertainty handling, deduplication and timer are unchanged. The
+regression reproduces the CLI rejection and passed after the fix, together
+with all 27 hourly-recovery and campaign-monitor tests. No dependency or
+shared skill was changed. Runtime recovery evidence is kept under
+`~/.home-agent/state/diagnostics/dyb-status-20261030-0152/`.

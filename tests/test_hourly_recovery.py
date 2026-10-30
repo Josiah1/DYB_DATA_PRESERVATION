@@ -179,9 +179,14 @@ class HourlyRecoveryTests(unittest.TestCase):
         thread = dict(id=self.config["thread_id"], cwd=str(hourly.PROJECT), status=dict(type="active"),
                       modelProvider="openai", model="gpt-6.1-sol", reasoningEffort="max")
         versions = [json.dumps(dict(status="running", socketPath=value)) for value in ("/first.sock", "/next.sock")]
+        def enqueue(argv, **kwargs):
+            if "--model" in argv:
+                return subprocess.CompletedProcess(argv, 2, "",
+                    "error: `codex queue` does not support `--model`; queued messages use the thread's model")
+            return subprocess.CompletedProcess(argv, 0, "", "")
         with mock.patch.object(hourly.subprocess, "check_output", side_effect=versions) as daemon, \
                 mock.patch.object(hourly.NativeOwner, "rpc", return_value=dict(thread=thread)), \
-                mock.patch.object(hourly.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as queue:
+                mock.patch.object(hourly.subprocess, "run", side_effect=enqueue) as queue:
             first, second = hourly.NativeOwner(self.config), hourly.NativeOwner(self.config)
             self.assertEqual((first.socket, second.socket), ("/first.sock", "/next.sock"))
             second.enqueue("one authorized request")
@@ -189,8 +194,8 @@ class HourlyRecoveryTests(unittest.TestCase):
         self.assertEqual(argv[1], "queue")
         self.assertIn("unix:///next.sock", argv)
         self.assertEqual(argv[argv.index("--thread") + 1], "existing-owner")
-        self.assertEqual(argv[argv.index("--model") + 1], "gpt-6.1-sol")
-        self.assertIn('model_reasoning_effort="max"', argv)
+        self.assertNotIn("--model", argv)
+        self.assertNotIn("-c", argv)
         self.assertEqual(daemon.call_count, 2)
         for call in daemon.call_args_list:
             self.assertEqual(call.args[0][1:], ["app-server", "daemon", "version"])
