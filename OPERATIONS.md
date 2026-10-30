@@ -1673,3 +1673,41 @@ regression reproduces the CLI rejection and passed after the fix, together
 with all 27 hourly-recovery and campaign-monitor tests. No dependency or
 shared skill was changed. Runtime recovery evidence is kept under
 `~/.home-agent/state/diagnostics/dyb-status-20261030-0152/`.
+
+### Transfer recovery after SSH disconnection, 2026-10-30
+
+The 04:53:56 UTC failure was an SSH transport loss during run82404's transfer,
+after all three bounded rsync attempts. It created no input-gap classification.
+A fresh global query at 05:58:32 UTC found zero jobs, no unresolved intents and
+71 COMPLETE staged runs, reserving 398,453,595,595 bytes within the existing
+400-GiB budget. Run82404 remained 42/42 chunks verified. A separate marker scan
+found no running workers, and no local controller or rsync process remained.
+
+The portable UUID was read-write through NTFS-3G. The incoming tree retained
+7,565,825,470 bytes; its catalog, run manifest, checksum manifest, completion
+marker and existing gap report matched staging exactly. Of its 39 existing ROOT
+files, 38 already had their final sizes and one was partial. The focused transfer
+regression passed partial reuse, bounded exhaustion, fatal-error rejection,
+mount-change and verification-before-publication checks. The existing single
+service started at 06:02:41 UTC with the same run79938 hold and resource limits.
+Production source, worker and converter hashes were unchanged; no deployment,
+job replay, dependency install or network/security configuration change occurred.
+Private evidence is in `build/oct30-transfer-recovery-result.json`.
+
+Reconciliation completed with a fresh, error-free heartbeat at 06:12:13 UTC.
+The partial copy advanced and run82404 was published by 06:14 UTC; staging was
+deleted only after the controller's successful verification. Independent
+readback verified all 44 artifact hashes, 8,003,254,538 bytes, 42 ROOT outputs and
+659 processed inputs out of 662 expected. The same three missing gaps remained,
+with no broken gaps added. All 38 retained full-sized ROOT files kept their
+sizes and modification times; one partial file completed and three remaining
+outputs were fetched. The catalog, checksum list, completion marker and gap
+report were byte-identical. The existing finalization step refreshed
+`run.json`'s completion timestamp; counts and selection remained unchanged.
+
+At 06:20 UTC the archive had 3,823 verified runs and run82550 was copying, with
+a fresh `error:null` controller heartbeat. The fresh scheduler query after
+publication found zero jobs, no unresolved intents and 70 COMPLETE staged runs;
+admission remained enabled with staging reservation backpressure. The checker
+cleared its alert and retained only run79938's pending-input warning. No full
+archive rehash or additional ROOT event decode was performed.
