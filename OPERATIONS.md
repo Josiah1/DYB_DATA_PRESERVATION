@@ -1786,3 +1786,26 @@ Independent verification of the last archived run82697 passed all 12 artifact
 checksums (3,014,264,734 bytes, 162 inputs). No full-archive rehash or CUDA/ROCm
 workload test was run. Detailed evidence is in the private local diagnostics
 directory `~/.home-agent/state/diagnostics/dyb-reboot-20261101-0119/`.
+
+### Second reboot recovery, 2026-11-01
+
+The intervening boot logged another NVIDIA Xid 79 at 07:13:00 UTC
+(02:13 EST), still on driver 615.71.10. After reboot the correct archive UUID
+was mounted read-write with ntfs-3g and its inventory matched all fixed
+catalogs. Progress was 3,993/4,009 runs, 11,576,117,919,883 artifact bytes,
+820,655 processed inputs, 4,053 missing, 1,730 broken and 4,896 pending.
+The fresh scheduler snapshot found 16 COMPLETE staged runs, zero jobs and no
+unresolved intents. The run82973 partial transfer retained 2,763,642,557 bytes.
+
+After confirming a free controller lock and reconnecting the same recovery
+owner, the existing service restarted at 08:36:08 UTC. It adopted all retained
+runs and resumed the transfer, which grew to 2,812,663,485 bytes by 08:40:29 UTC.
+At 08:41:06 UTC the monitor had no alert, warning or hold; hourly recovery was
+healthy and both timers were active. The GPU was responsive at 31 C with no
+current-boot Xid errors; the recurring GPU fault remains unresolved.
+
+The last archived run82890 passed all 29 artifact checksums (7,993,771,460
+bytes, 431 processed and two missing inputs). No pipeline, driver, clock or
+input-policy changes were made. No full-archive rehash or CUDA/ROCm workload
+test was run. Evidence is in
+`~/.home-agent/state/diagnostics/dyb-reboot-20261101-0334/`.
