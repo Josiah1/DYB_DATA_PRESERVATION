@@ -1,0 +1,768 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-10-11T10:15:30.491829+00:00",
+  "scope": "Read-only recheck of the live cluster Retw_lijj/src_FD active Validate_AdSimple input contract and one actual archived ROOT chunk; no TWin rebuild or physics rerun.",
+  "conclusions": {
+    "active_source_variables": 19,
+    "all_active_source_variables_stored_for_retained_entries": true,
+    "bounded_archived_sample_all_19_bitwise_signatures_match": true,
+    "original_AdScaledNL_metadata_equal_to_mini_AdSimpleNL_in_sample": true,
+    "unchanged_cluster_reader_compatible": false,
+    "full_archive_or_physics_equivalence_established": false
+  },
+  "cluster_source": {
+    "ssh_alias": "dayabay1",
+    "host": "lxlogin001.ihep.ac.cn",
+    "path": "/dybfs2/users/lijj16/TWin/Retw_lijj/src_FD",
+    "git_head": "2c6f7ac5e8f36c09a263f813e6da09d3881ff1c0",
+    "dirty_paths": [
+      "Common/Cuts.h",
+      "Retw_lijj/src_FD/BuildEvent.C"
+    ],
+    "active_mode": "Validate_AdSimple",
+    "analysis_datasets": [
+      "Gd",
+      "H"
+    ],
+    "files": {
+      "Retw_lijj/src_FD/AdScaledReader.C": {
+        "sha256": "a1aac41bc841b3533ddd74304cca1bdc1a1b08fb3523627f1afc8c4664cbad3e"
+      },
+      "Retw_lijj/src_FD/AdScaledReader.h": {
+        "sha256": "a0a7fd4cb08ef2d2e1c91af4f190ecb70d3419a43496119ce928ffb6dcf27e33"
+      },
+      "Retw_lijj/src_FD/AdScaledReaderDict.C": {
+        "sha256": "0bd5a7134e99ec05fc1dabb118becf06bcf3bcad0b547a00141ce4b98052a663"
+      },
+      "Retw_lijj/src_FD/AdSimpleReader.C": {
+        "sha256": "8327792ca2db7aa53cfebe576b765d9d25f3d2cd3f966889c4b8f57fbb9f4861"
+      },
+      "Retw_lijj/src_FD/AdSimpleReader.h": {
+        "sha256": "a99d1ca698fdaeb89508f348d57bf6adffbd89e0aa531eb6bb90e073a48bc31a"
+      },
+      "Retw_lijj/src_FD/AdSimpleReaderDict.C": {
+        "sha256": "f450272c8a981d2b0e49259d7dcad26ca1124f639d5a9ae5bdafdd5337377d0e"
+      },
+      "Retw_lijj/src_FD/BuildEvent.C": {
+        "sha256": "2d6589651bd6e867773c4aab58dd52e49a81329fc437e79c8fc4fc81dd6dfb52"
+      },
+      "Retw_lijj/src_FD/CachedQueueInsert.C": {
+        "sha256": "88dda7c96fefaff0fea698e5dc1ca09b7123dca55044cc7ce0dfa3a4057f5569"
+      },
+      "Retw_lijj/src_FD/CaliParameters_withoutaverage.txt": {
+        "sha256": "ec41c48eb42ded595894f20f1d213e4bb5422effc13d1a8189d721429c85f4d0"
+      },
+      "Retw_lijj/src_FD/CalibStatsReader.C": {
+        "error": "[Errno 13] Permission denied: '/dybfs2/users/lijj16/TWin/Retw_lijj/src_FD/CalibStatsReader.C'"
+      },
+      "Retw_lijj/src_FD/CalibStatsReader.h": {
+        "sha256": "31c88a0714486892774a11b5fe1c40486e2aacff30a95fe8d0a88192fbe96bdb"
+      },
+      "Retw_lijj/src_FD/CalibStatsReaderDict.C": {
+        "sha256": "b23f278b39503dc00c3fcf44f23531587589aebce136a1392d54f8a751a70f59"
+      },
+      "Retw_lijj/src_FD/Event.h": {
+        "sha256": "6e3d064019d1c28067abc86a51ed409ec613f3f8beca47a6020e3b88a91e7cf4"
+      },
+      "Retw_lijj/src_FD/EventTree.C": {
+        "sha256": "d8982c6a8cc235ea345e1c9dcc0a4d439b6e4361f2b81f4f15d76f66e9f15df2"
+      },
+      "Retw_lijj/src_FD/EventTree.h": {
+        "sha256": "d5b9d41e4113ecab94c7546b9ae15687f6248c6921a39b6d8556664a58e8ab23"
+      },
+      "Retw_lijj/src_FD/Fixer.C": {
+        "sha256": "e1a6047d348f7e48788385f42303bcd466064311a014b547fb26371689966733"
+      },
+      "Retw_lijj/src_FD/Fixer.h": {
+        "sha256": "28a446187e2b7e32ba6b2e8669ef3e61ae66c308ea57b22dd24c2ff8d4e6ea1e"
+      },
+      "Retw_lijj/src_FD/Globals.h": {
+        "sha256": "3bb92c39352b3b644fec37f5144e8e7541a5c5f98e8b48b7a8be2849dd687f48"
+      },
+      "Retw_lijj/src_FD/Makefile": {
+        "sha256": "32df673f4553446d927d1de92244dad831762bdbf9456e666259fa38b9f59897"
+      },
+      "Retw_lijj/src_FD/Retw.C": {
+        "sha256": "ce4b8081482b7d105b7b0136365da9b93e154eff2981aaae6d1306f6d25a21b3"
+      },
+      "Retw_lijj/src_FD/RunInfo.C": {
+        "sha256": "924e155b22a2720887bf668f960d95cee3a0423c1f0115cb647e63bd9dbc24f2"
+      },
+      "Retw_lijj/src_FD/RunInfo.h": {
+        "sha256": "8fdf44389586b3917caacf12a9e482d0338c4dc77d95cf427df9ee8d0c94cd70"
+      },
+      "Retw_lijj/src_FD/StreamReader.C": {
+        "sha256": "3205e42ba43eae264dc882ae4ee4771db2bc3ae337e34d49b50e105e76922ad3"
+      },
+      "Retw_lijj/src_FD/StreamReader.h": {
+        "sha256": "09ccf9068e6c79d1a8797cdac3c1d1690e9d7539a85fbf8552202f298329991f"
+      },
+      "Retw_lijj/src_FD/SubEvt.C": {
+        "sha256": "41df8074586b6e0d831c41455c968efdc8c96d6b797a83b8560754e85e4b7a3a"
+      },
+      "Retw_lijj/src_FD/SubEvt.h": {
+        "sha256": "18e80388a2650d5d79d7c2700da9f6cd7a23c111bee49137821fe8bcc6c4cc37"
+      },
+      "Retw_lijj/src_FD/TimeStamp.C": {
+        "sha256": "ac3de8dc0ec7e8afff1fcfcb19872babe002f17a2d7f2ac40d348b50194f822b"
+      },
+      "Retw_lijj/src_FD/TimeStamp.h": {
+        "sha256": "6c9a9225f21208fb1b13319958637e943989eb42b06b0edb85e7f6d400dab4a6"
+      },
+      "Common/Cuts.h": {
+        "sha256": "5f59a8475e42284c30cbe63d6506e451009d0786693e42bbba51ae4c18325bb6"
+      }
+    },
+    "call_path": [
+      "Retw.C:239-278",
+      "SubEvt.C:53-78",
+      "CachedQueueInsert.C:6-163",
+      "BuildEvent.C:47-444"
+    ]
+  },
+  "variable_mapping": [
+    {
+      "branch": "site",
+      "analysis_variable": "Site",
+      "reader_tree": "Event/Rec/AdScaledNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Short_t",
+      "retw_assignment_line": 240
+    },
+    {
+      "branch": "detector",
+      "analysis_variable": "Det",
+      "reader_tree": "Event/Rec/AdScaledNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Short_t",
+      "retw_assignment_line": 241
+    },
+    {
+      "branch": "triggerNumber",
+      "analysis_variable": "TrigNum",
+      "reader_tree": "Event/Rec/AdScaledNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "UInt_t",
+      "retw_assignment_line": 242
+    },
+    {
+      "branch": "triggerType",
+      "analysis_variable": "TrigType",
+      "reader_tree": "Event/Rec/AdScaledNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "UInt_t",
+      "retw_assignment_line": 243
+    },
+    {
+      "branch": "triggerTimeSec",
+      "analysis_variable": "TrigSec",
+      "reader_tree": "Event/Rec/AdScaledNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Int_t",
+      "retw_assignment_line": 244
+    },
+    {
+      "branch": "triggerTimeNanoSec",
+      "analysis_variable": "TrigNano",
+      "reader_tree": "Event/Rec/AdScaledNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Int_t",
+      "retw_assignment_line": 245
+    },
+    {
+      "branch": "nHit",
+      "analysis_variable": "NPmt",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Int_t",
+      "retw_assignment_line": 246
+    },
+    {
+      "branch": "MiddleTimeRMS",
+      "analysis_variable": "TRms",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 247
+    },
+    {
+      "branch": "Quadrant",
+      "analysis_variable": "Quadrant",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 248
+    },
+    {
+      "branch": "Q1",
+      "analysis_variable": "Q1",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 249
+    },
+    {
+      "branch": "Q2",
+      "analysis_variable": "Q2",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 250
+    },
+    {
+      "branch": "MaxQ",
+      "analysis_variable": "QMax2Sum",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 251
+    },
+    {
+      "branch": "MaxQ_2inchPMT",
+      "analysis_variable": "MaxQ2Inch",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 252
+    },
+    {
+      "branch": "Kurtosis",
+      "analysis_variable": "Kurtosis",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 253
+    },
+    {
+      "branch": "time_PSD_local_RMS",
+      "analysis_variable": "time_PSD_local_RMS",
+      "reader_tree": "Event/Data/CalibStats",
+      "preserved_tree": "Event/Data/CalibStats",
+      "root_type": "Float_t",
+      "retw_assignment_line": 254
+    },
+    {
+      "branch": "energy",
+      "analysis_variable": "E",
+      "reader_tree": "Event/Rec/AdSimpleNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Float_t",
+      "retw_assignment_line": 257
+    },
+    {
+      "branch": "x",
+      "analysis_variable": "X",
+      "reader_tree": "Event/Rec/AdSimpleNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Float_t",
+      "retw_assignment_line": 258
+    },
+    {
+      "branch": "y",
+      "analysis_variable": "Y",
+      "reader_tree": "Event/Rec/AdSimpleNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Float_t",
+      "retw_assignment_line": 259
+    },
+    {
+      "branch": "z",
+      "analysis_variable": "Z",
+      "reader_tree": "Event/Rec/AdSimpleNL",
+      "preserved_tree": "Event/Rec/AdSimpleNL",
+      "root_type": "Float_t",
+      "retw_assignment_line": 260
+    }
+  ],
+  "run_identifier": {
+    "reader": "Retw.C:417-444 parses a dot-delimited seven-digit run from input path",
+    "archive_filename": "preserved.0051263.slim.000000.root",
+    "generated_branch": "Event/Rec/AdSimpleNL/runNumber",
+    "sample_value": 51263
+  },
+  "derived_variables": "Q1/Q2, radius, ellipse, ellipse_KR, muon identification, muon history and coincidence state are computed from retained inputs; they are not additional source ROOT branches.",
+  "archive_run": {
+    "path": "/media/josiah/LAYJ萤捷/DYB_DATA_PRESERVATION/data/P17B/EH1/run51263",
+    "root_file": "/media/josiah/LAYJ萤捷/DYB_DATA_PRESERVATION/data/P17B/EH1/run51263/outputs/preserved.0051263.slim.000000.root",
+    "complete_marker_present": true,
+    "checked_at": "2026-10-11T10:13:26.238252+00:00",
+    "schema_version": 4,
+    "catalog_complete": false,
+    "catalog_sha256": "abd24dd92c03b6f59a6cb61345eb556fc8c12bbaf157843a585dbc58c353c726",
+    "expected_inputs": 21,
+    "processed_inputs": 1,
+    "broken_gaps": 20,
+    "missing_gaps": 0,
+    "selection": {
+      "ad_detectors": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "ad_min_energy_mev": 0.6,
+      "counted_band_mev": [
+        0.3,
+        0.6
+      ],
+      "keep_non_ad": true,
+      "mode": "on"
+    },
+    "mount": {
+      "source": "/dev/sdb3",
+      "target": "/media/josiah/LAYJ萤捷",
+      "fstype": "fuseblk",
+      "options": "rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,blksize=4096"
+    },
+    "ubuntu_converter_sha256": "a829b7adcb25b51afe9b3698f51d5bceeb1d59fb7e2f83fca1c682f5b4579230",
+    "local_converter_sha256": "a829b7adcb25b51afe9b3698f51d5bceeb1d59fb7e2f83fca1c682f5b4579230"
+  },
+  "original_mini_probe": {
+    "checked_at": "2026-10-11T10:15:03.900795+00:00",
+    "dropped_entries": 141111,
+    "host": "lxlogin001.ihep.ac.cn",
+    "kept_entries": 608677,
+    "mask": "detector outside [1,4] or Float_t energy > Float_t(0.6); preserves source entry order",
+    "mini": "/lustrefs/juno26/dyw/rec/All-mini/runs_0051000/runs_0051200/run_0051263/minirecon.Neutrino.0051263.Physics.EH1-Merged.P17B-I._0016.root",
+    "numpy": "2.4.4",
+    "original_metadata_comparison": {
+      "bitwise_mismatches": {
+        "detector": 0,
+        "site": 0,
+        "triggerNumber": 0,
+        "triggerTimeNanoSec": 0,
+        "triggerTimeSec": 0,
+        "triggerType": 0
+      },
+      "bytes": 696360497,
+      "entries": 749788,
+      "mini_tree": "Event/Rec/AdSimpleNL",
+      "original": "/dybfs/rec/P17B/rec/runs_0051000/runs_0051200/run_0051263/recon.Neutrino.0051263.Physics.EH1-Merged.P17B-I._0016.root",
+      "passed": true,
+      "signatures": {
+        "detector": {
+          "dtype": "int16",
+          "entries": 749788,
+          "sha256": "4814132794993384cf68a1109f5a57196d80a209f959f3c17504580236a623aa"
+        },
+        "site": {
+          "dtype": "int16",
+          "entries": 749788,
+          "sha256": "a2ecc09bfe594aeaed65ed9a30977be383b89a4577eef1ad01076e3aa5e16a72"
+        },
+        "triggerNumber": {
+          "dtype": "uint32",
+          "entries": 749788,
+          "sha256": "9fe9c5e4c0d63ce3a1e130ba9f57cfe296240b17d6cb48eb3640015788857e12"
+        },
+        "triggerTimeNanoSec": {
+          "dtype": "int32",
+          "entries": 749788,
+          "sha256": "f774c2a2ba2ebaa3ed3f485aefeed1908995955af6b0c2951999c0935a09f1ca"
+        },
+        "triggerTimeSec": {
+          "dtype": "int32",
+          "entries": 749788,
+          "sha256": "a3537978529d54e475d36f240842bfad503a96c75891ecc32339b687c8046069"
+        },
+        "triggerType": {
+          "dtype": "uint32",
+          "entries": 749788,
+          "sha256": "3ad3e82165d63345ef507c260da9ad5a4142f7e2ca13c2a9b5bfe9936a16df7e"
+        }
+      },
+      "tree": "Event/Rec/AdScaledNL",
+      "types": {
+        "detector": "Short_t",
+        "site": "Short_t",
+        "triggerNumber": "UInt_t",
+        "triggerTimeNanoSec": "Int_t",
+        "triggerTimeSec": "Int_t",
+        "triggerType": "UInt_t"
+      }
+    },
+    "python": "3.13.11 (main, Feb  3 2026, 13:31:38) [GCC 13.1.0]",
+    "required": {
+      "Event/Data/CalibStats": {
+        "Kurtosis": "Float_t",
+        "MaxQ": "Float_t",
+        "MaxQ_2inchPMT": "Float_t",
+        "MiddleTimeRMS": "Float_t",
+        "Q1": "Float_t",
+        "Q2": "Float_t",
+        "Quadrant": "Float_t",
+        "nHit": "Int_t",
+        "time_PSD_local_RMS": "Float_t"
+      },
+      "Event/Rec/AdSimpleNL": {
+        "detector": "Short_t",
+        "energy": "Float_t",
+        "site": "Short_t",
+        "triggerNumber": "UInt_t",
+        "triggerTimeNanoSec": "Int_t",
+        "triggerTimeSec": "Int_t",
+        "triggerType": "UInt_t",
+        "x": "Float_t",
+        "y": "Float_t",
+        "z": "Float_t"
+      }
+    },
+    "root": "6.40.02",
+    "signatures": {
+      "Kurtosis": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "da8a8a73757c891824e5d3c53801927459c0f12a9d9cded78b45177dcd65d451"
+      },
+      "MaxQ": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "01d5a6779377946bee006efee247d03b4ad417822f89d0d0110d7969aacc61ca"
+      },
+      "MaxQ_2inchPMT": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "13a6af8dcde73b9f4a71c28e3a9811cb9d513e4abe7ee03872f277b987d785ec"
+      },
+      "MiddleTimeRMS": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "5ce41cce9cb04743cafba1512efc421690f9beba1d710b610d1108b54be640db"
+      },
+      "Q1": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "330517c57332acc8ea40ee11530c6e89a4ced3d20529b275131b64e147022a2a"
+      },
+      "Q2": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "c8f1ebce1a50d185568d06546b484a53cb8748b3952f189d6fd82374884644f3"
+      },
+      "Quadrant": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "f4579abb30fa96ab19e99f10ba174ae1f42299a3756016c467e48fc2cb1f2810"
+      },
+      "detector": {
+        "dtype": "int16",
+        "entries": 608677,
+        "sha256": "f40b2b11ab6c9677d5be5a629cbdfedfc6647be1d6bd436ae2571411acd944cc"
+      },
+      "energy": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "b2c459e717a056b2addff23e107fde3948065bbfb17a8bac6f8dcab019dc146c"
+      },
+      "nHit": {
+        "dtype": "int32",
+        "entries": 608677,
+        "sha256": "ee2de68039c8333b50fd1bf194c4df2c795d70e4b4f7c461856d6d6ec8bd659d"
+      },
+      "site": {
+        "dtype": "int16",
+        "entries": 608677,
+        "sha256": "96c2cea9b2f282e2b779a32a70c087c5bf5fe0090bec72b5823d87a2cfe57918"
+      },
+      "time_PSD_local_RMS": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "6968d909e1df1db4694bd2a023f4632244b4c9a525311503c27f6897e9c1577f"
+      },
+      "triggerNumber": {
+        "dtype": "uint32",
+        "entries": 608677,
+        "sha256": "4b8367c138105b0c36749d9052f770ed4896925d91669c2ebcc1a7984164329f"
+      },
+      "triggerTimeNanoSec": {
+        "dtype": "int32",
+        "entries": 608677,
+        "sha256": "7532fdecc20e7ac971b8da8d4bf7edff13770014fe86a82c128312bb18b4e52a"
+      },
+      "triggerTimeSec": {
+        "dtype": "int32",
+        "entries": 608677,
+        "sha256": "9c5e1e62a87e890e3a972d6701221ae882c9a06bbc0946ddeb2d34260068d9b3"
+      },
+      "triggerType": {
+        "dtype": "uint32",
+        "entries": 608677,
+        "sha256": "9f8c60c1af4cfa6031387d24c0bb0dbd940edb726b78b2f7c3310409867a2d89"
+      },
+      "x": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "a00856da295bfa96a2c0d551b80e3aeab04619fb48d9648c20537797a29c3d72"
+      },
+      "y": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "bab483d59c273c55054f427f680ef8ab04e57e7fddc3a5a6f19d66651b2ee197"
+      },
+      "z": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "a48e1085c6a7d7d2d7913e4b42f605c6b4a697f312f6a9ca021be5029e88404c"
+      }
+    },
+    "source_bytes": 49546587,
+    "source_entries": 749788,
+    "source_sha256": "f9b584cdf5741e617a5949e289bc211ce40bd4c018a3c5cbcbd0475fddc21cb1"
+  },
+  "archived_chunk_probe": {
+    "ad_entries": 180447,
+    "bytes": 13032343,
+    "checked_at": "2026-10-11T10:15:30.491829+00:00",
+    "compression": 509,
+    "copied_sha256_matches": true,
+    "entries": 608677,
+    "non_ad_entries": 428230,
+    "numpy": "2.5.1",
+    "old_reader_AdScaledNL_present": false,
+    "provenance": {
+      "entries": 1,
+      "firstEntry": 0,
+      "keptEntries": 608677,
+      "leaves": {
+        "adBelow0p3MeV": "Long64_t",
+        "adFrom0p3To0p6MeV": "Long64_t",
+        "dataDurationSeconds": "Double_t",
+        "entries": "Long64_t",
+        "firstEntry": "Long64_t",
+        "firstTriggerTimeNanoSec": "Int_t",
+        "firstTriggerTimeSec": "Int_t",
+        "inputBytes": "Long64_t",
+        "keptEntries": "Long64_t",
+        "lastTriggerTimeNanoSec": "Int_t",
+        "lastTriggerTimeSec": "Int_t",
+        "path": "string",
+        "processingCpuSeconds": "Double_t",
+        "processingWallSeconds": "Double_t"
+      }
+    },
+    "root": "6.40.04",
+    "run_number": 51263,
+    "run_number_all_match": true,
+    "selection_record": "AD entries (detector 1-4) kept when energy > 0.6 MeV; dropped AD entries counted per source and detector as energy <= 0.3 MeV or NaN (adBelow0p3MeV) and 0.3 < energy <= 0.6 MeV (adFrom0p3To0p6MeV); every other detector kept; timestamps cover every source trigger",
+    "sha256": "dd7187c853b2ef1451fae1cd5a8d25776f7c0dd1f5fc729d30786de4dd198a24",
+    "signatures": {
+      "Kurtosis": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "da8a8a73757c891824e5d3c53801927459c0f12a9d9cded78b45177dcd65d451"
+      },
+      "MaxQ": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "01d5a6779377946bee006efee247d03b4ad417822f89d0d0110d7969aacc61ca"
+      },
+      "MaxQ_2inchPMT": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "13a6af8dcde73b9f4a71c28e3a9811cb9d513e4abe7ee03872f277b987d785ec"
+      },
+      "MiddleTimeRMS": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "5ce41cce9cb04743cafba1512efc421690f9beba1d710b610d1108b54be640db"
+      },
+      "Q1": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "330517c57332acc8ea40ee11530c6e89a4ced3d20529b275131b64e147022a2a"
+      },
+      "Q2": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "c8f1ebce1a50d185568d06546b484a53cb8748b3952f189d6fd82374884644f3"
+      },
+      "Quadrant": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "f4579abb30fa96ab19e99f10ba174ae1f42299a3756016c467e48fc2cb1f2810"
+      },
+      "detector": {
+        "dtype": "int16",
+        "entries": 608677,
+        "sha256": "f40b2b11ab6c9677d5be5a629cbdfedfc6647be1d6bd436ae2571411acd944cc"
+      },
+      "energy": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "b2c459e717a056b2addff23e107fde3948065bbfb17a8bac6f8dcab019dc146c"
+      },
+      "nHit": {
+        "dtype": "int32",
+        "entries": 608677,
+        "sha256": "ee2de68039c8333b50fd1bf194c4df2c795d70e4b4f7c461856d6d6ec8bd659d"
+      },
+      "site": {
+        "dtype": "int16",
+        "entries": 608677,
+        "sha256": "96c2cea9b2f282e2b779a32a70c087c5bf5fe0090bec72b5823d87a2cfe57918"
+      },
+      "time_PSD_local_RMS": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "6968d909e1df1db4694bd2a023f4632244b4c9a525311503c27f6897e9c1577f"
+      },
+      "triggerNumber": {
+        "dtype": "uint32",
+        "entries": 608677,
+        "sha256": "4b8367c138105b0c36749d9052f770ed4896925d91669c2ebcc1a7984164329f"
+      },
+      "triggerTimeNanoSec": {
+        "dtype": "int32",
+        "entries": 608677,
+        "sha256": "7532fdecc20e7ac971b8da8d4bf7edff13770014fe86a82c128312bb18b4e52a"
+      },
+      "triggerTimeSec": {
+        "dtype": "int32",
+        "entries": 608677,
+        "sha256": "9c5e1e62a87e890e3a972d6701221ae882c9a06bbc0946ddeb2d34260068d9b3"
+      },
+      "triggerType": {
+        "dtype": "uint32",
+        "entries": 608677,
+        "sha256": "9f8c60c1af4cfa6031387d24c0bb0dbd940edb726b78b2f7c3310409867a2d89"
+      },
+      "x": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "a00856da295bfa96a2c0d551b80e3aeab04619fb48d9648c20537797a29c3d72"
+      },
+      "y": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "bab483d59c273c55054f427f680ef8ab04e57e7fddc3a5a6f19d66651b2ee197"
+      },
+      "z": {
+        "dtype": "float32",
+        "entries": 608677,
+        "sha256": "a48e1085c6a7d7d2d7913e4b42f605c6b4a697f312f6a9ca021be5029e88404c"
+      }
+    },
+    "source_disk_path": "/media/josiah/LAYJ萤捷/DYB_DATA_PRESERVATION/data/P17B/EH1/run51263/outputs/preserved.0051263.slim.000000.root",
+    "temporary_data_removed": true,
+    "trees": {
+      "Event/Data/CalibStats": {
+        "entries": 608677,
+        "leaves": {
+          "Kurtosis": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "MaxQ": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "MaxQ_2inchPMT": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "MiddleTimeRMS": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "Q1": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "Q2": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "Quadrant": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "nHit": {
+            "length": 1,
+            "type": "Int_t"
+          },
+          "time_PSD_local_RMS": {
+            "length": 1,
+            "type": "Float_t"
+          }
+        }
+      },
+      "Event/Rec/AdSimpleNL": {
+        "entries": 608677,
+        "leaves": {
+          "detector": {
+            "length": 1,
+            "type": "Short_t"
+          },
+          "energy": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "runNumber": {
+            "length": 1,
+            "type": "Int_t"
+          },
+          "site": {
+            "length": 1,
+            "type": "Short_t"
+          },
+          "triggerNumber": {
+            "length": 1,
+            "type": "UInt_t"
+          },
+          "triggerTimeNanoSec": {
+            "length": 1,
+            "type": "Int_t"
+          },
+          "triggerTimeSec": {
+            "length": 1,
+            "type": "Int_t"
+          },
+          "triggerType": {
+            "length": 1,
+            "type": "UInt_t"
+          },
+          "x": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "y": {
+            "length": 1,
+            "type": "Float_t"
+          },
+          "z": {
+            "length": 1,
+            "type": "Float_t"
+          }
+        }
+      }
+    }
+  },
+  "value_comparison": {
+    "passed": true,
+    "matched_branches": 19,
+    "compared_entries": 608677,
+    "scalar_values": 11564863,
+    "mismatched_branches": []
+  },
+  "method": {
+    "helper": "estimates/noenergy-2026-09-27/benchmark.py:root_arrays and signatures",
+    "helper_sha256": "0cb20f810b739e0acd370d04a986413ae443de209892cc6f506962d65117d306",
+    "schema_source": "estimates/noenergy-2026-09-27/plan.json:required; checked against live Retw assignments, converter definitions and archived scalar leaves",
+    "bitwise_comparison": "Compare dtype, entries and SHA-256 of contiguous native little-endian branch bytes, after masking the source by the production Float_t 0.6 MeV selection in original order.",
+    "original_metadata": "Direct uint16/uint32 views compared entry-by-entry for six original AdScaledNL metadata branches against mini AdSimpleNL over all 749788 source entries.",
+    "existing_ihep_runtime": "/cvmfs/sft.cern.ch/lcg/views/LCG_110/x86_64-el9-gcc13-opt/setup.sh",
+    "ihep_runtime_fallback": "Managed Python lacks _socket; existing LCG Python used. No dependencies installed.",
+    "local_runtime": "~/TOOLs/install/python-current/bin/python3 with existing ROOT 6.40.04",
+    "data_locality": "No original mini/reconstruction data copied. One named 13032343-byte archived ROOT file copied temporarily, SHA-256 matched to Ubuntu, read fully and deleted; temporary SSH master closed."
+  },
+  "limitations": [
+    "Retw.C:390-395 constructs three chains, and Retw.C:124-163 requires AdScaledNL entries aligned with the other two trees. The archive has only AdSimpleNL and CalibStats; migrate the six metadata bindings and remove the AdScaledNL chain dependencies before using this unchanged cluster reader.",
+    "Generated readers bind additional legacy branches not used by the active analysis. These branches are not preserved; remove their unused bindings during reader migration.",
+    "Alternative Validate_AdScaled and Validate_AdTime energy/position modes are disabled and not covered.",
+    "Production selection keeps AD Float_t energy > Float_t(0.6), plus every non-AD entry, and drops lower-energy/NaN AD readouts. This is preservation of selected entries, not all input readouts. Full physics equivalence, including energy corrections, trigger grouping and live time, was not checked.",
+    "Live cluster H/Gd default cuts use corrected energy > 0.7 MeV. The 0.3 MeV acpo mode belongs to the newer GitHub reader, not this old cluster executable; such lower-threshold analyses cannot recover the dropped readouts.",
+    "CaliParameters_withoutaverage.txt, Fixer.C and Common/Cuts.h are external analysis/calibration inputs; their live hashes are recorded, but they are not event variables embedded in the compressed files.",
+    "CalibStatsReader.C was unreadable (PermissionError). Its readable header defines Init/GetEntry and all relevant branch bindings. No TWin rebuild or end-to-end physics run was performed.",
+    "One recent archived chunk was compared fully. This does not certify all archived files, nor fill the known missing or broken source-file gaps."
+  ]
+}

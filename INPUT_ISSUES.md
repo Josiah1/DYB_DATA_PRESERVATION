@@ -1,10 +1,10 @@
 # Recorded missing input files
 
-Campaign ledger snapshot: **2026-10-11T05:57:41+00:00**. The campaign is ongoing.
+Campaign ledger snapshot: **2026-11-01T12:29:43+00:00**. All runs are finalized; status: `finished_with_gaps`.
 
-- **788 individual mini files** recorded missing with `ENOENT` (errno 2).
-- **656** omitted from verified local archives (`skipped`).
-- **132** recorded for omission during run preparation (`skip_recorded`).
+- **4075 individual mini files** recorded missing with `ENOENT` (errno 2).
+- **4075** omitted from verified local archives (`skipped`).
+- **0** recorded for omission during run preparation (`skip_recorded`).
 - **12** earlier mini failures were preserved from their exact originals;
   their provenance remains in the ledger and they are excluded from this lost-input list.
 
@@ -18,11 +18,11 @@ minis are excluded from this missing list and separately exported in
 [CSV](broken_files.csv), and [proof ledger](broken-input-issues.json).
 
 Coverage is finalized archives plus recorded preparation observations. At this
-snapshot, 590 of 4009 runs were finalized,
-with 138,014 preserved inputs, 656 finalized missing omissions
-and 20 finalized broken omissions
-out of 831,334 catalog inputs. Further missing files may be
-recorded as the campaign processes the remaining catalogs. Absence is established
+snapshot, 4009 of 4009 runs were finalized,
+with 825,529 preserved inputs, 4075 finalized missing omissions
+and 1730 finalized broken omissions
+out of 831,334 catalog inputs. All expected inputs are accounted for; no inputs remain pending.
+Absence is established
 at each recorded observation time; this export does not probe source storage again.
 
 Source: Ubuntu's `provenance/input-issues.json` on archive disk UUID

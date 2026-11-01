@@ -68,6 +68,11 @@ def main():
     ledger = json.loads((ROOT / "input-issues.json").read_text())
     rows = missing_rows(ledger)
     summary = ledger["summary"]
+    campaign_state = (f"All runs are finalized; status: `{summary['status']}`."
+                      if summary.get("finished") else "The campaign is ongoing.")
+    coverage = ("All expected inputs are accounted for; no inputs remain pending."
+                if summary.get("finished") else
+                "Further missing files may be recorded as the campaign processes the remaining catalogs.")
     finalized = summary.get("missing_skipped_inputs", summary["skipped_inputs"])
     recovered = sum(i["status"] == "preserved_from_exact_recon" for i in ledger["issues"])
     columns = ("mini_path", "filename", "period", "hall", "run", "catalog_index",
@@ -80,7 +85,7 @@ def main():
     preserve.atomic_text(ROOT / "missing-input-files.list", "".join(row["mini_path"] + "\n" for row in rows))
     preserve.atomic_text(ROOT / "INPUT_ISSUES.md", f"""# Recorded missing input files
 
-Campaign ledger snapshot: **{ledger['updated_at']}**. The campaign is ongoing.
+Campaign ledger snapshot: **{ledger['updated_at']}**. {campaign_state}
 
 - **{len(rows)} individual mini files** recorded missing with `ENOENT` (errno 2).
 - **{finalized}** omitted from verified local archives (`skipped`).
@@ -101,8 +106,8 @@ Coverage is finalized archives plus recorded preparation observations. At this
 snapshot, {summary['completed_runs']} of {summary['expected_runs']} runs were finalized,
 with {summary['processed_inputs']:,} preserved inputs, {finalized} finalized missing omissions
 and {summary.get('broken_skipped_inputs', 0)} finalized broken omissions
-out of {summary['expected_inputs']:,} catalog inputs. Further missing files may be
-recorded as the campaign processes the remaining catalogs. Absence is established
+out of {summary['expected_inputs']:,} catalog inputs. {coverage}
+Absence is established
 at each recorded observation time; this export does not probe source storage again.
 
 Source: Ubuntu's `provenance/input-issues.json` on archive disk UUID

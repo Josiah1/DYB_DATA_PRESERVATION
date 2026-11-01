@@ -6,6 +6,27 @@ analyses. It processes runs concurrently within a 300-job cap, copies each run t
 disk, verifies it, and only then permits deletion of that run's cluster
 staging area.
 
+## Status at temporary handoff, 2026-11-01
+
+The authorized single-disk campaign finished at **12:29:43 UTC (07:29:43 EST)**.
+All **4,009 runs** are finalized and **831,334 expected inputs** are accounted
+for: **825,529 processed, 4,075 missing, 1,730 broken, zero pending**. Final
+status is **`finished_with_gaps`**, not a gap-free archive. Published artifacts
+total **11,666,404,378,868 bytes (11.67 TB)**. The controller exited successfully;
+the final cluster query found no jobs, staged runs or submission intents.
+The existing hourly recovery timer reports `finished_noop`.
+
+The final [missing-input report](INPUT_ISSUES.md), [broken-input report](BROKEN_INPUTS.md)
+and their JSON/CSV/path lists are saved in this repository. Gaps refer only to
+the fixed good-run catalogs; excluded runs/files are outside these counts.
+The [catalog backup](catalog_backups/README.md) preserves all 4,009 lists, and
+each archived run also retains its unchanged full `catalog.list`.
+
+See the [handoff and resumption record](OPERATIONS.md#temporary-handoff-2026-11-01)
+for evidence locations and remaining work. Mandatory per-run verification
+preceded remote cleanup; an independent full-archive rehash and ROOT reopen
+have not been run. The workstation's recurring NVIDIA Xid 79 remains unresolved.
+
 The single-disk campaign was authorized on **2026-09-29**. Its 48-file,
 288-conversion worker benchmark selected **raw AD energy > 0.6 MeV**, with
 an estimated **11.84 TB** output and a **12.35 TB** upper sample envelope for
@@ -106,7 +127,7 @@ mini productions, which may have different branch content.
 ## Output format
 
 ROOT with **ZSTD level 9 and 256 KiB branch baskets** is the default
-(`dyb-slim-v5`, schema 4). Automatic basket-size adaptation and autosave are disabled;
+(`dyb-slim-v5.1`, schema 4, compatible with v5 output). Automatic basket-size adaptation and autosave are disabled;
 event baskets are flushed at each source boundary for bounded memory and
 per-source timing. The lossless codec comparison in [BENCHMARK.md](BENCHMARK.md)
 measured a smaller, slower LZMA alternative; it has not been adopted.
@@ -146,6 +167,15 @@ are taken over every trigger in the source, dropped ones included. With the
 selection off every entry is written, `keptEntries = entries`, and the two AD
 count arrays are still filled. The mode is recorded in the run marker,
 `run.json`, and every chunk; one archive must use one mode.
+
+The `main` branch retains every non-AD event, including pool entries with
+`nHit <= 5`, to stay consistent with the existing compression campaign.
+It stores only `AdSimpleNL` and `CalibStats`; it does not require or add ARMuon.
+The standalone `converter-share` branch has a different three-tree contract
+including ARMuon. Both branches retain all non-AD events without an `nHit` cut.
+The v5.1 update carries over input validation, write-error checks, safe
+publication, and support for a valid zero-row result when all AD events fail
+the cut. Selection metadata, schema 4, and source-report columns are unchanged.
 
 **Opt-in selection caveat:** this selection uses uncorrected
 `AdSimpleNL.energy`. TWin applies an energy correction before
@@ -193,6 +223,12 @@ One run is handled as one transaction:
 Failed chunks are resumable; verified chunks and timing reports are skipped.
 The external disk is checked before and after every transfer, preventing a
 silently unmounted volume from authorizing remote deletion.
+
+The converter requires distinct, new ROOT and TSV output paths. It publishes
+each file with a hard link, so a destination created by another process is
+not overwritten. The output filesystem must support hard links. Caught
+errors remove partial files; a forced process kill can leave partial files
+or a TSV without a published ROOT file.
 
 The October 11 user decision releases the seven empty-mini content holds using
 `--skip-broken-minis`. Every failed chunk must first have the exact recognized

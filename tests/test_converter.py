@@ -24,8 +24,10 @@ MACRO = r'''
 #include <TLeaf.h>
 #include <TTree.h>
 #include <cassert>
+#include <cstring>
 #include <fstream>
 #include <string>
+#include <vector>
 void make_source(const char* table, const char* output) {
   TFile file(output, "RECREATE");
   TDirectory* event = file.mkdir("Event");
@@ -58,7 +60,7 @@ void make_source(const char* table, const char* output) {
   int det; std::string e; long s, n;
   while (in >> det >> e >> s >> n) {
     detector = det; energy = std::stof(e); sec = s; nano = n; ++triggerNumber;
-    x = triggerNumber; y = -x; z = 0.5f * x; nHit = 10 + det; stat = 0.25f * det;
+    x = triggerNumber; y = -x; z = 0.5f * x; nHit = triggerNumber % 12; stat = 0.25f * det;
     simple.Fill(); stats.Fill();
   }
   rec->cd(); simple.Write();
@@ -68,6 +70,8 @@ void make_source(const char* table, const char* output) {
 void check_format(const char* path) {
   TFile file(path);
   assert(!file.IsZombie() && file.GetCompressionSettings() == 509);
+  for (const char* name : {"ARMuon", "AdSimple", "AdScaled", "AdScaledNL"})
+    assert(!file.Get((std::string("Event/Rec/") + name).c_str()));
   for (const char* name : {"Event/Rec/AdSimpleNL", "Event/Data/CalibStats"}) {
     auto* tree = file.Get<TTree>(name);
     assert(tree && tree->GetAutoFlush() == 0 && tree->GetAutoSave() == 0);
@@ -83,6 +87,42 @@ void check_format(const char* path) {
   auto* sources = file.Get<TTree>("Preservation/Sources");
   for (const char* name : {"dataDurationSeconds", "processingWallSeconds", "processingCpuSeconds"})
     assert(std::string(sources->GetLeaf(name)->GetTypeName()) == "Double_t");
+}
+void compare_retained(const char* result, const char* first, const char* second, bool selected) {
+  TFile output(result);
+  const std::vector<const char*> paths = {first, second};
+  for (const char* name : {"Event/Rec/AdSimpleNL", "Event/Data/CalibStats"}) {
+    auto* out = output.Get<TTree>(name);
+    assert(out);
+    const bool calibration = std::string(name) == "Event/Data/CalibStats";
+    assert(out->GetListOfBranches()->GetEntries() == (calibration ? 9 : 11));
+    Long64_t offset = 0, low_hit_pool = 0;
+    for (auto* path : paths) {
+      TFile input(path);
+      auto* in = input.Get<TTree>(name);
+      auto* ad = input.Get<TTree>("Event/Rec/AdSimpleNL");
+      for (Long64_t e = 0; e < in->GetEntries(); ++e) {
+        assert(ad->GetEntry(e) > 0);
+        const auto detector = ad->GetLeaf("detector")->GetValueLong64();
+        if (selected && detector >= 1 && detector <= 4 &&
+            !(ad->GetLeaf("energy")->GetValue() > 0.6)) continue;
+        assert(in->GetEntry(e) > 0 && out->GetEntry(offset) > 0);
+        if (!calibration) assert(out->GetLeaf("runNumber")->GetValueLong64() == 7777);
+        if (calibration && (detector == 5 || detector == 6) &&
+            out->GetLeaf("nHit")->GetValueLong64() <= 5) ++low_hit_pool;
+        for (auto* object : *out->GetListOfLeaves()) {
+          auto* leaf = static_cast<TLeaf*>(object);
+          if (std::string(leaf->GetName()) == "runNumber") continue;
+          auto* original = in->GetLeaf(leaf->GetName());
+          assert(original && std::string(original->GetTypeName()) == leaf->GetTypeName());
+          assert(std::memcmp(original->GetValuePointer(), leaf->GetValuePointer(), leaf->GetLenType()) == 0);
+        }
+        ++offset;
+      }
+    }
+    assert(out->GetEntries() == offset);
+    if (calibration) assert(low_hit_pool > 0);
+  }
 }
 '''
 
@@ -159,7 +199,7 @@ class ConverterTests(unittest.TestCase):
             table = self.root / "table{}.txt".format(seed)
             table.write_text("".join("{} {} {} {}\n".format(d, repr(e), s, n) for d, e, s, n in rows))
             output = self.root / "source{}.root".format(seed)
-            subprocess.run([find_root(), "-l", "-b", "-q", '{}("{}","{}")'.format(macro, table, output)],
+            subprocess.run([find_root(), "-n", "-l", "-b", "-q", '{}("{}","{}")'.format(macro, table, output)],
                            check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             self.assertTrue(output.stat().st_size > 0)
             self.sources.append(str(output))
@@ -202,9 +242,10 @@ class ConverterTests(unittest.TestCase):
         self.assertTrue(any(e["counts"][0] for e in self.expected), "below band must be populated")
         for mode in ("on", "off"):
             output, report, metrics = self.convert(mode, "chunk-" + mode)
-            subprocess.run([find_root(), "-l", "-b", "-q", "-e",
+            subprocess.run([find_root(), "-n", "-l", "-b", "-q", "-e",
                             '#include "{}"'.format(self.root / "make_source.C"),
-                            "-e", 'check_format("{}");'.format(output)], check=True,
+                            "-e", 'check_format("{}"); compare_retained("{}", "{}", "{}", {});'.format(
+                                output, output, *self.sources, "true" if mode == "on" else "false")], check=True,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             kept = self.check_report(report, mode)
             self.assertEqual(metrics["selection"], mode)
@@ -218,6 +259,51 @@ class ConverterTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             subprocess.run([str(CONVERTER), "--verify", self.sources[0]], check=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_all_ad_entries_cut_produces_a_verifiable_empty_output(self):
+        table, source = self.root / "low.txt", self.root / "low.root"
+        table.write_text("1 0.1 1500000000 42\n2 0.5 1500000001 42\n")
+        subprocess.run([find_root(), "-n", "-l", "-b", "-q",
+                        '{}("{}","{}")'.format(self.root / "make_source.C", table, source)],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.sources = [str(source)]
+        self.expected = [expectation([(1, 0.1, 1500000000, 42), (2, 0.5, 1500000001, 42)])]
+        output, report, metrics = self.convert("on", "all-cut")
+        self.assertEqual(metrics["kept_entries"], "0")
+        self.assertEqual(self.check_report(report, "on"), 0)
+        checked = subprocess.check_output([str(CONVERTER), "--verify", str(output)], text=True)
+        self.assertEqual(preserve.parse_verify_output(checked),
+                         dict(entries=0, source_entries=2, sources=1, selection="on"))
+
+    def test_invalid_paths_and_arguments_do_not_publish_outputs(self):
+        listing = self.root / "inputs.list"
+        listing.write_text("\n".join(self.sources) + "\n")
+        output, report = self.root / "result.root", self.root / "result.tsv"
+        command = [str(CONVERTER), "--input-list", str(listing), "--output", str(output),
+                   "--source-report", str(report), "--run-number", "7777"]
+        for extra, message in [
+                (["--run-number", "7777junk"], "nonnegative integer"),
+                (["--source-report", str(self.root / "." / "result.root")], "different paths")]:
+            failed = subprocess.run(command + extra, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn(message, failed.stderr)
+            self.assertFalse(output.exists())
+            self.assertFalse(report.exists())
+            self.assertFalse(list(self.root.glob("*.partial.*")))
+        listing.write_text(self.sources[0] + "\tbad\n")
+        failed = subprocess.run(command, capture_output=True, text=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("input path contains a tab", failed.stderr)
+        self.assertFalse(output.exists())
+        self.assertFalse(report.exists())
+
+    def test_existing_outputs_are_not_overwritten(self):
+        output, report, _ = self.convert("on", "existing")
+        before = output.read_bytes(), report.read_bytes()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.convert("on", "existing")
+        self.assertEqual(before, (output.read_bytes(), report.read_bytes()))
+        self.assertFalse(list(self.root.glob("*.partial.*")))
 
     def test_worker_finalize_and_archive_completeness_chain(self):
         stage = self.root / "stage"

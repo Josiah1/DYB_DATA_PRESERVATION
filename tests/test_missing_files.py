@@ -53,7 +53,21 @@ class MissingFileListTest(unittest.TestCase):
                 export_missing_files.main()
             self.assertEqual((root/'missing-input-files.list').read_text(),issue['mini_check']['path']+'\n')
             self.assertIn('**1** omitted',(root/'INPUT_ISSUES.md').read_text())
+            self.assertIn('The campaign is ongoing.',(root/'INPUT_ISSUES.md').read_text())
             export_broken.assert_called_once_with(root,mixed)
+
+            mixed['issues'] = mixed['issues'][:2]
+            mixed['summary'].update(finished=True, status='finished_with_gaps',
+                                    expected_runs=1, expected_inputs=3, pending_inputs=0)
+            (root/'input-issues.json').write_text(json.dumps(mixed))
+            with mock.patch.object(export_missing_files,'ROOT',root), \
+                    mock.patch('preserve.export_broken_files'):
+                export_missing_files.main()
+            report = (root/'INPUT_ISSUES.md').read_text()
+            self.assertIn('All runs are finalized; status: `finished_with_gaps`.', report)
+            self.assertIn('no inputs remain pending', report)
+            self.assertNotIn('ongoing', report)
+            self.assertNotIn('remaining catalogs', report)
 
 
 if __name__ == "__main__":

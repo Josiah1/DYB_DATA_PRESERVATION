@@ -5,6 +5,101 @@ cleanup, and final completeness verification. Nothing in the preparation or
 benchmark performed on 2026-08-28 submitted a HepJob task or deleted cluster
 data.
 
+## Temporary handoff, 2026-11-01
+
+The user requested a temporary ending after the campaign finished, with all
+meaningful changes committed and pushed. This checkpoint supersedes the
+progress totals in the historical recovery entries below.
+
+The controller completed at **2026-11-01 12:29:43 UTC (07:29:43 EST)**. Final
+accounting is:
+
+| Record | Final value |
+| --- | ---: |
+| Runs finalized / expected | 4,009 / 4,009 |
+| Expected input files | 831,334 |
+| Processed input files | 825,529 |
+| Confirmed missing skips | 4,075 |
+| Confirmed broken skips | 1,730 |
+| Pending inputs | 0 |
+| Published artifact bytes | 11,666,404,378,868 |
+
+`finished=true`, `complete=false`, `status=finished_with_gaps`:
+825,529 + 4,075 + 1,730 = 831,334. All runs are accounted for, including the
+explicit missing-only resolution of `P20A/EH3/run79938`; no ROOT output is
+claimed for that run. Its original preparation-hold evidence and checksummed
+resolution remain in the archive. The 12 earlier exact-original recoveries
+remain preserved inputs and historical ledger entries, not additional gaps.
+
+The archive is `/media/josiah/LAYJ萤捷/DYB_DATA_PRESERVATION`, on UUID
+`2A4F48F8BDFEE355`, mounted read-write through ntfs-3g (`fuseblk`). Approximately
+2.32 TB remained free at the completion check. Identify the disk by UUID before
+using its mount path after any remount or reboot.
+
+### Records retained
+
+- `data/catalog-inventory.json` on the portable disk freezes the selected
+  P17B v4, P19A v5, P20A v3 and P21A v1 catalogs. Repository
+  `catalog_backups/` retains all 4,009 lists, 831,334 paths and 98,092,666 bytes
+  with their checksum manifest. All 4,009 portable `catalog.list` copies were
+  checked against those fixed hashes at handoff. Missing/broken counts exclude
+  files outside this catalog set; skipped entries remain in the saved lists.
+- Portable `provenance/input-issues.json`, finalized at 12:29:43 UTC, is copied
+  byte-for-byte to repository `input-issues.json`. The exporter validates exact
+  catalog identities and proof before regenerating `INPUT_ISSUES.md`,
+  `missing-input-files.list`, `missing-input-files.csv`, `BROKEN_INPUTS.md`,
+  `broken_files.list`, `broken_files.csv` and `broken-input-issues.json`.
+  The final missing path list and CSV are also retained in portable `provenance/`.
+  All 5,805 gaps are finalized; none remain preparation-only observations.
+- Each run retains `run.json`, `.complete`, its original catalog, durations,
+  artifact checksums and, where required, `input-gaps.json`. The final five
+  transfers (run83250, run83260, run83389, run83423 and run83428) passed the
+  normal local verification before their remote staging was removed.
+- `build/campaign-status.json` and portable `provenance/progress.json` hold the
+  current metadata check. The hourly state remains local in
+  `build/hourly-recovery/`; its private owner configuration is not published.
+  Handoff checks are retained locally under
+  `~/.home-agent/state/diagnostics/dyb-handoff-20261101/`.
+- The portable `provenance/OPERATIONS.md` and standard-library verifier
+  `provenance/preserve.py` are refreshed to the handoff version. The historical
+  `campaign.json`, per-run provenance and data are retained. Git also preserves
+  the separately developed upstream v5.1 converter and TWin compatibility
+  records; merging them does not rerun conversion or change archived data.
+
+Handoff validation passed `make test`: 90 tests, 83 passed and seven skipped
+because the configured ROOT/converter or IHEP LCG runtime was unavailable.
+The checks included all fixed catalog backups and the report exporter's
+unfinished/finished states. Final missing and broken exports matched their
+ledger counts; the copied ledger and regenerated broken exports were
+byte-identical to the portable final records. The refreshed portable verifier
+also passed the missing-only run79938 check. Git whitespace checks passed.
+
+### Services and later resumption
+
+`dyb-preservation.service` is inactive after a successful exit, with no alert,
+warning or unresolved hold. A fresh read-only `dayabay1` pool query found zero
+jobs, zero staged runs, zero reserved/output bytes and no submission intents.
+Both existing timers remain active: the five-minute checker reports final
+metadata, and hourly recovery is latched in `finished_noop`. No controller
+restart or replacement recovery conversation is needed for this finished set.
+
+For a later status check, first verify the mount UUID, then run
+`systemctl --user start dyb-preservation-check.service` and inspect the current
+status plus the final gap reports. Do not reset the fixed inventory, remove
+completion markers or restart conversion merely to resume this conversation.
+Any attempt to recover the recorded gaps needs new source evidence and a
+reviewed backfill plan that preserves the existing archive and its provenance.
+
+An independent full checksum pass remains optional follow-up work. From the
+archive root, `python3 provenance/preserve.py verify-all data` reads about
+11.67 TB; a valid reconciled archive with these known gaps returns status 2.
+Structural ROOT reopening additionally requires a suitable built verifier.
+Neither full pass was performed for this handoff. No GPU workload test was run.
+The recurrent NVIDIA Xid 79 / fallen-off-bus fault remains unresolved despite
+the BIOS update and driver 615.71.10; the latest recorded recurrence was
+2026-11-01 07:13:00 UTC in the preceding boot. Treat the earlier responsive GPU
+check as a dated observation, not evidence of a permanent fix.
+
 ## Concurrent campaign, 2026-10-01 UTC
 
 The Ubuntu launcher targets up to **300 outstanding single-core compression
@@ -390,6 +485,17 @@ stops the controller except for explicitly recorded missing minis and proved
 empty-`AdEnergy`-only broken inputs. A disk-held
 advisory lock rejects a second controller. This sample-based capacity estimate does not establish
 archive-wide input availability or lossless TWin physics equivalence.
+
+The controller automatically collects file-level observations in the destination's
+`provenance/input-issues.json`. The repository's [input-issues.json](input-issues.json)
+and [INPUT_ISSUES.md](INPUT_ISSUES.md) preserve a dated snapshot. After copying an
+updated ledger, run `python3 scripts/export_missing_files.py` to regenerate the
+[plain path list](missing-input-files.list) and [CSV](missing-input-files.csv).
+The exporter checks fixed-catalog identity and ENOENT evidence for every file,
+and separates finalized omissions from recorded preparation gaps. Historical
+original-file recoveries remain in the ledger and are excluded from the lost-input
+list. New processing uses minis only. At campaign close, reconcile the record
+with all 831,334 expected inputs and state any unassessed remainder.
 
 Install the persistent five-minute progress/error check after committing and
 pushing the verified code:
