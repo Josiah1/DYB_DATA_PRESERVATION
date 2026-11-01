@@ -1758,3 +1758,31 @@ or error, and the retained run83256 transfer had grown from 6,708,864,704 to
 hourly recovery reported healthy and both timers were active. The archive
 accounted for 3,852 runs, including this explicit missing-only record, with
 766,196 processed inputs, 3,798 missing, 1,730 broken and 59,610 still pending.
+
+### Recovery after reboot, 2026-11-01
+
+The archive UUID `2A4F48F8BDFEE355` was mounted read-write with ntfs-3g.
+Its inventory matched all 4,009 fixed catalogs. The archive accounted for
+3,987 runs (11,536,852,792,495 artifact bytes), with 818,539 processed inputs,
+4,041 missing, 1,730 broken and 7,024 still pending. A fresh global scheduler
+query found all 22 remaining staged runs COMPLETE, zero jobs and no unresolved
+intents. The interrupted run82701 transfer retained 907,240,854 bytes.
+
+The controller lock was free. The existing service restarted at 05:21:43 UTC,
+adopted the retained runs, and published a fresh heartbeat at 05:26:30 UTC.
+By 05:27:04 UTC the partial transfer had grown to 1,019,700,630 bytes. The
+05:27:34 UTC monitor had no alert or warning, and hourly recovery was healthy.
+Both timers remained active. The original recovery conversation was resumed
+without a new message; its later idle unloading is normal, and its identity
+and empty queue remained readable through the live daemon.
+
+The previous boot logged NVIDIA Xid 79 and "GPU has fallen off the bus" at
+04:07:07 UTC while using driver 615.71.10. After reboot the RTX 5070 Ti was
+responsive at 31 C, with persistence and idle-stability services active and
+no current-boot Xid/display-progress errors. The intermittent fault remains
+unresolved. No driver, clock, pipeline code or input-policy changes were made.
+
+Independent verification of the last archived run82697 passed all 12 artifact
+checksums (3,014,264,734 bytes, 162 inputs). No full-archive rehash or CUDA/ROCm
+workload test was run. Detailed evidence is in the private local diagnostics
+directory `~/.home-agent/state/diagnostics/dyb-reboot-20261101-0119/`.
